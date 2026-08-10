@@ -55,6 +55,10 @@ GIO_SYNC = os.getenv("GIO_SYNC", "07:00").strip()  # giờ tự kéo danh sách 
 # Topic nhận bản tổng hợp toàn vùng. Để trống = topic General của group.
 REPORT_THREAD_ID = int(os.getenv("REPORT_THREAD_ID", "0") or 0) or None
 
+# Ngày bắt đầu áp dụng (YYYY-MM-DD). Trước ngày này bot vẫn đếm ảnh và trả lời lệnh,
+# nhưng KHÔNG tự bắn nhắc/chốt vào group — tránh báo cáo sai trong lúc chạy thử.
+NGAY_BAT_DAU = os.getenv("NGAY_BAT_DAU", "").strip()
+
 MAX_LEN = 3900  # giới hạn an toàn dưới mức 4096 ký tự của Telegram
 
 
@@ -372,11 +376,22 @@ async def on_any_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 
+def chua_toi_ngay_chay() -> bool:
+    if NGAY_BAT_DAU and today_str() < NGAY_BAT_DAU:
+        log.info("Chưa tới NGAY_BAT_DAU=%s, bỏ qua báo cáo tự động hôm nay.", NGAY_BAT_DAU)
+        return True
+    return False
+
+
 async def job_nhac(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if chua_toi_ngay_chay():
+        return
     await _bao_cao(context, la_chot=False)
 
 
 async def job_chot(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if chua_toi_ngay_chay():
+        return
     await _bao_cao(context, la_chot=True)
 
 
@@ -733,7 +748,9 @@ async def cmd_lich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Số ảnh yêu cầu: <b>{SO_ANH_YEU_CAU}</b>\n"
         f"Mức phạt: <b>{money(MUC_PHAT)}</b>/BC/ngày\n"
         f"Group báo cáo: <code>{REPORT_CHAT_ID}</code>\n"
-        f"Đồng bộ danh sách: {('mỗi ngày ' + GIO_SYNC) if SHEET_URL else 'chưa cấu hình SHEET_URL'}",
+        f"Đồng bộ danh sách: {('mỗi ngày ' + GIO_SYNC) if SHEET_URL else 'chưa cấu hình SHEET_URL'}\n"
+        + (f"⏸ <b>Chưa áp dụng</b> — báo cáo tự động bắt đầu từ {vn_date(NGAY_BAT_DAU)}"
+           if chua_toi_ngay_chay() else "▶️ Đang áp dụng"),
         parse_mode=ParseMode.HTML,
     )
 
