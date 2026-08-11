@@ -38,7 +38,16 @@ log = logging.getLogger("bc-bot")
 # ----------------------------------------------------------------- config ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 TZ = ZoneInfo(os.getenv("TZ", "Asia/Ho_Chi_Minh"))
-SO_ANH_YEU_CAU = int(os.getenv("SO_ANH_YEU_CAU", "2"))
+SO_ANH_YEU_CAU = int(os.getenv("SO_ANH_YEU_CAU", "3"))
+
+# Mô tả bộ ảnh phải gửi — dùng lại ở lời gọi 18:00, bản nhắc và /help.
+DANH_SACH_ANH = [
+    "1️⃣ Ảnh chụp từ ngoài cửa (thấy cả biển GHN)",
+    "2️⃣ Layout BC – chụp từ ngoài vào trong, thể hiện tổng thể khu vực, "
+    "bố trí gọn gàng, sạch sẽ",
+    "3️⃣ Nhà vệ sinh – đảm bảo sạch sẽ",
+]
+MO_TA_ANH_NGAN = "ngoài cửa + layout + nhà vệ sinh, có timemark"
 MUC_PHAT = int(os.getenv("MUC_PHAT", "100000"))
 GIO_NHAC = [t.strip() for t in os.getenv("GIO_NHAC", "20:30").split(",") if t.strip()]
 GIO_CHOT = os.getenv("GIO_CHOT", "21:30").strip()
@@ -329,7 +338,7 @@ def build_nhac(ngay: str, am_name: str | None = None) -> str:
         out.append(f"AM: {am_tag(am_name)}")
     out += [
         f"Khung giờ gửi: <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> · "
-        f"Yêu cầu: <b>{SO_ANH_YEU_CAU} ảnh</b> (layout + nhà vệ sinh, có timemark)",
+        f"Yêu cầu: <b>{SO_ANH_YEU_CAU} ảnh</b> ({MO_TA_ANH_NGAN})",
         f"Đã đủ: <b>{len(du)}/{tong}</b>",
         "",
     ]
@@ -519,8 +528,9 @@ async def job_mo_gio(context: ContextTypes.DEFAULT_TYPE) -> None:
         noi_dung = [
             "📸 <b>Đã đến giờ chụp hình layout BC rồi anh chị ơi!</b>",
             f"Khung giờ gửi: <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> · "
-            f"<b>{SO_ANH_YEU_CAU} ảnh</b> (layout + nhà vệ sinh, có timemark)",
-            f"Cú pháp: <code>Mã BC - Tên BC - {vn_date(ngay)}</code>",
+            f"Mỗi BC <b>{SO_ANH_YEU_CAU} ảnh</b>, phải có timemark:",
+            *DANH_SACH_ANH,
+            f"Cú pháp caption: <code>Mã BC - Tên BC - {vn_date(ngay)}</code>",
             f"Topic này có <b>{so_bc}</b> BC cần gửi.",
         ]
         tag = _tag_thanh_vien(thread_id, am_name)
@@ -550,7 +560,8 @@ HELP = """<b>BOT NHẮC CHỤP LAYOUT BƯU CỤC</b>
 <b>Gửi ảnh</b> — caption theo cú pháp:
 <code>Mã BC - Tên BC - Ngày/Tháng/Năm</code>
 Ví dụ: <code>23009000 - (BGI) Đa Mai - 11/08/2026</code>
-Mỗi BC gửi <b>{n} ảnh</b>/ngày (layout + nhà vệ sinh, có timemark).
+Mỗi BC gửi <b>{n} ảnh</b>/ngày, phải có timemark:
+{ds}
 ⏰ Khung giờ nhận: <b>{tu} – {chot}</b>. Gửi ngoài khung giờ bot không tính.
 
 <b>Cho nhân viên</b>
@@ -585,7 +596,8 @@ Mỗi BC gửi <b>{n} ảnh</b>/ngày (layout + nhà vệ sinh, có timemark).
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
-        HELP.format(n=SO_ANH_YEU_CAU, tu=GIO_NHAN_TU, chot=GIO_CHOT),
+        HELP.format(n=SO_ANH_YEU_CAU, tu=GIO_NHAN_TU, chot=GIO_CHOT,
+                    ds="\n".join(DANH_SACH_ANH)),
         parse_mode=ParseMode.HTML,
     )
 

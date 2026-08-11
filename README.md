@@ -1,7 +1,13 @@
 # Bot nhắc chụp hình layout BC
 
-Bot Telegram ghi nhận ảnh layout/nhà vệ sinh các bưu cục gửi trong group, nhắc lúc **20:30**
-và chốt danh sách BC chưa đạt lúc **21:30**, kèm tổng hợp tiền phạt theo AM.
+Bot Telegram ghi nhận ảnh các bưu cục gửi trong group, nhắc lúc **20:30** và chốt danh sách
+BC chưa đạt lúc **21:30**, kèm tổng hợp tiền phạt theo AM.
+
+Mỗi BC gửi **3 ảnh**/ngày, đều phải có timemark:
+
+1. Ảnh chụp từ ngoài cửa (thấy cả biển GHN)
+2. Layout BC – chụp từ ngoài vào trong, thể hiện tổng thể khu vực, bố trí gọn gàng, sạch sẽ
+3. Nhà vệ sinh – đảm bảo sạch sẽ
 
 ## Cách hoạt động
 
@@ -9,7 +15,7 @@ và chốt danh sách BC chưa đạt lúc **21:30**, kèm tổng hợp tiền p
 |---|---|
 | Trước 18:00 | Ảnh gửi sớm **không được tính** — bot nhắc gửi lại trong khung giờ |
 | 18:00 | Gọi cả topic: *"Đã đến giờ chụp hình layout BC rồi anh chị ơi!"* + tag thành viên |
-| 18:00 – 21:30 | Khung giờ nhận. BC gửi ảnh kèm caption `Mã BC - Tên BC - Ngày/Tháng/Năm` → bot thả 👍 và đếm ảnh |
+| 18:00 – 21:30 | Khung giờ nhận. BC gửi **3 ảnh** kèm caption `Mã BC - Tên BC - Ngày/Tháng/Năm` → bot thả 👍 và đếm ảnh |
 | Sau 21:30 | Vẫn ghi nhận nhưng **đánh dấu trễ**, bot báo lại tại tin nhắn đó |
 
 ### Hai giai đoạn
@@ -186,8 +192,8 @@ Sửa biến môi trường, không cần sửa code:
 
 ## Lưu ý vận hành
 
-- Bot đếm theo **số ảnh**, không phân biệt được đâu là layout đâu là nhà vệ sinh. BC gửi 2 ảnh
-  layout vẫn tính đủ — AM cần soát ngẫu nhiên.
+- Bot đếm theo **số ảnh**, không phân biệt được đâu là ảnh ngoài cửa, đâu là layout, đâu là
+  nhà vệ sinh. BC gửi 3 ảnh layout vẫn tính đủ — AM cần soát ngẫu nhiên.
 - Ảnh gửi dạng **album** vẫn đếm đủ (chỉ ảnh đầu cần caption).
 - BC gửi nhầm mã: quản lý gõ `/reset <mã>` để xoá ghi nhận trong ngày rồi gửi lại.
 - Ngày trong caption khác ngày hệ thống → bot cảnh báo ngay tại tin nhắn đó.
