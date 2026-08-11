@@ -52,7 +52,9 @@ MUC_PHAT = int(os.getenv("MUC_PHAT", "100000"))
 GIO_NHAC = [t.strip() for t in os.getenv("GIO_NHAC", "20:30").split(",") if t.strip()]
 GIO_CHOT = os.getenv("GIO_CHOT", "21:30").strip()
 # Trước giờ này bot không ghi nhận ảnh — BC gửi sớm sẽ được nhắc gửi lại trong khung giờ.
-GIO_NHAN_TU = os.getenv("GIO_NHAN_TU", "18:00").strip()
+GIO_NHAN_TU = os.getenv("GIO_NHAN_TU", "17:00").strip()
+# Giờ bot gọi cả topic vào chụp hình. Mặc định trùng lúc mở khung giờ nhận.
+GIO_GOI = os.getenv("GIO_GOI", "").strip() or GIO_NHAN_TU
 REPORT_CHAT_ID = int(os.getenv("REPORT_CHAT_ID", "0") or 0)
 ALLOWED_CHAT_IDS = {
     int(x) for x in os.getenv("ALLOWED_CHAT_IDS", "").replace(" ", "").split(",") if x
@@ -574,8 +576,8 @@ Mỗi BC gửi <b>{n} ảnh</b>/ngày, phải có timemark:
 <b>Topic theo AM</b>
 /dangkytopic &lt;tên AM&gt; — gõ BÊN TRONG topic của AM để gắn topic đó cho AM ấy
 /dstopic — xem AM nào đã/chưa có topic
-/dsthanhvien — ai trong topic này sẽ được tag lúc {tu}
-/goi — bắn thử lời gọi {tu} ngay
+/dsthanhvien — ai trong topic này sẽ được tag lúc {goi}
+/goi — bắn thử lời gọi {goi} ngay
 /xoatopic — gỡ topic hiện tại
 /dsam — danh sách AM và số BC phụ trách
 
@@ -596,7 +598,7 @@ Mỗi BC gửi <b>{n} ảnh</b>/ngày, phải có timemark:
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
-        HELP.format(n=SO_ANH_YEU_CAU, tu=GIO_NHAN_TU, chot=GIO_CHOT,
+        HELP.format(n=SO_ANH_YEU_CAU, tu=GIO_NHAN_TU, chot=GIO_CHOT, goi=GIO_GOI,
                     ds="\n".join(DANH_SACH_ANH)),
         parse_mode=ParseMode.HTML,
     )
@@ -818,13 +820,14 @@ async def cmd_dsthanhvien(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not tid:
         return await msg.reply_text("Lệnh này phải gõ bên trong topic.")
     ds = db.thanh_vien_cua(tid)
+
     am_name = db.am_of_thread(tid)
     tag_duoc = [t for t in ds if (t["username"] or "").lower() not in KHONG_TAG]
     bo_qua = [t for t in ds if (t["username"] or "").lower() in KHONG_TAG]
 
     out = [f"<b>THÀNH VIÊN BOT GHI NHẬN TRONG TOPIC NÀY</b>",
            f"AM: {esc(am_name or 'chưa gắn')}", ""]
-    out.append(f"✅ <b>Sẽ tag lúc {GIO_NHAN_TU} ({len(tag_duoc)})</b>")
+    out.append(f"✅ <b>Sẽ tag lúc {GIO_GOI} ({len(tag_duoc)})</b>")
     out += [f"• {esc(t['ho_ten'] or '')}"
             + (f" @{esc(t['username'])}" if t["username"] else " <i>(không có nick)</i>")
             for t in tag_duoc] or ["<i>chưa ghi nhận ai</i>"]
@@ -942,6 +945,7 @@ async def cmd_lich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Múi giờ: <code>{TZ}</code>\n"
         f"Khung giờ nhận ảnh: <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> "
         f"{ {'chua_mo': '(chưa mở)', 'dang_mo': '(đang mở)', 'da_dong': '(đã đóng)'}[trang_thai_gio()] }\n"
+        f"Giờ gọi cả topic: <b>{GIO_GOI}</b>\n"
         f"Giờ nhắc: <b>{', '.join(GIO_NHAC)}</b>\n"
         f"Giờ chốt: <b>{GIO_CHOT}</b>\n"
         f"Số ảnh yêu cầu: <b>{SO_ANH_YEU_CAU}</b>\n"
@@ -959,10 +963,10 @@ async def cmd_lich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def post_init(app: Application) -> None:
     db.init_db()
     jq = app.job_queue
-    t = parse_hhmm(GIO_NHAN_TU)
+    t = parse_hhmm(GIO_GOI)
     if t:
         jq.run_daily(job_mo_gio, time=t, name="mo-gio")
-        log.info("Đã lên lịch gọi cả topic lúc %s", GIO_NHAN_TU)
+        log.info("Đã lên lịch gọi cả topic lúc %s", GIO_GOI)
     for hhmm in GIO_NHAC:
         t = parse_hhmm(hhmm)
         if t:

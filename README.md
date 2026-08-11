@@ -13,9 +13,11 @@ Mỗi BC gửi **3 ảnh**/ngày, đều phải có timemark:
 
 | Thời điểm | Bot làm gì |
 |---|---|
-| Trước 18:00 | Ảnh gửi sớm **không được tính** — bot nhắc gửi lại trong khung giờ |
-| 18:00 | Gọi cả topic: *"Đã đến giờ chụp hình layout BC rồi anh chị ơi!"* + tag thành viên |
-| 18:00 – 21:30 | Khung giờ nhận. BC gửi **3 ảnh** kèm caption `Mã BC - Tên BC - Ngày/Tháng/Năm` → bot thả 👍 và đếm ảnh |
+| Trước 17:00 | Ảnh gửi sớm **không được tính** — bot nhắc gửi lại trong khung giờ |
+| 17:00 | Gọi cả topic: *"Đã đến giờ chụp hình layout BC rồi anh chị ơi!"* + tag thành viên |
+| 17:00 – 21:30 | Khung giờ nhận. BC gửi **3 ảnh** kèm caption `Mã BC - Tên BC - Ngày/Tháng/Năm` → bot thả 👍 và đếm ảnh |
+| 20:30 | Nhắc: bắn vào **topic riêng của từng AM**, chỉ liệt kê BC của AM đó |
+| 21:30 | Chốt: mỗi topic nhận danh sách không đạt + tiền phạt của chính AM đó, topic chung nhận bản tổng hợp toàn vùng |
 | Sau 21:30 | Vẫn ghi nhận nhưng **đánh dấu trễ**, bot báo lại tại tin nhắn đó |
 
 ### Hai giai đoạn
@@ -31,9 +33,6 @@ Mốc chuyển là `NGAY_AP_DUNG_PHAT` (mặc định 17/08/2026):
 
 BC được xếp vào 4 nhóm: **đạt** (đủ ảnh, đúng khung giờ) · **gửi trễ** (đủ ảnh nhưng có ảnh
 sau 21:30) · **gửi thiếu** (chưa đủ số ảnh) · **chưa gửi**.
-| 20:30 | Nhắc: bắn vào **topic riêng của từng AM**, chỉ liệt kê BC của AM đó |
-| 21:30 | Chốt: mỗi topic nhận danh sách không đạt + tiền phạt của chính AM đó |
-| 21:30 | Topic chung nhận bản tổng hợp toàn vùng (chỉ số liệu, không tag ai) |
 
 ### Báo cáo theo topic
 
@@ -50,10 +49,10 @@ vẫn được báo, gom vào một tin ở topic chung để không sót ai.
 Các lệnh `/thieu`, `/da`, `/chot` gõ **trong topic** thì chỉ trả dữ liệu của AM đó;
 gõ ở **General** thì ra toàn vùng.
 
-### Tag thành viên lúc 18:00
+### Tag thành viên lúc mở khung giờ
 
 Telegram **không cho bot lấy danh sách thành viên** group — API chỉ trả về admin. Nên bot
-tự ghi lại ai đã từng nhắn trong mỗi topic, và tag đúng những người đó lúc 18:00. Danh sách
+tự ghi lại ai đã từng nhắn trong mỗi topic, và tag đúng những người đó lúc 17:00. Danh sách
 này dày lên theo ngày; ai chưa nhắn lần nào kể từ khi bot chạy thì chưa được tag.
 
 AM luôn được gọi kể cả chưa nhắn, vì bot đã có nick từ sheet.
@@ -181,7 +180,9 @@ Bot cũng liệt kê sẵn các AM thiếu nick sau mỗi lần đồng bộ.
 
 Sửa biến môi trường, không cần sửa code:
 
-- `GIO_NHAC=18:00,20:30` — nhắc nhiều lần trong ngày
+- `GIO_NHAN_TU=17:00` — giờ mở khung nhận ảnh; `GIO_GOI` để trống thì lời gọi cả topic
+  bắn đúng lúc này, điền giờ khác nếu muốn tách ra
+- `GIO_NHAC=19:00,20:30` — nhắc nhiều lần trong ngày
 - `GIO_CHOT=21:30`, `SO_ANH_YEU_CAU=2`, `MUC_PHAT=100000`
 - `ADMIN_IDS=123456,789012` — giới hạn ai được dùng lệnh quản trị
 - `ALLOWED_CHAT_IDS=-100111,-100222` — nhận ảnh từ nhiều group, báo cáo về `REPORT_CHAT_ID`
