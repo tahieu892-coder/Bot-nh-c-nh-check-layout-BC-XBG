@@ -42,6 +42,8 @@ SO_ANH_YEU_CAU = int(os.getenv("SO_ANH_YEU_CAU", "2"))
 MUC_PHAT = int(os.getenv("MUC_PHAT", "100000"))
 GIO_NHAC = [t.strip() for t in os.getenv("GIO_NHAC", "20:30").split(",") if t.strip()]
 GIO_CHOT = os.getenv("GIO_CHOT", "21:30").strip()
+# Trước giờ này bot không ghi nhận ảnh — BC gửi sớm sẽ được nhắc gửi lại trong khung giờ.
+GIO_NHAN_TU = os.getenv("GIO_NHAN_TU", "18:00").strip()
 REPORT_CHAT_ID = int(os.getenv("REPORT_CHAT_ID", "0") or 0)
 ALLOWED_CHAT_IDS = {
     int(x) for x in os.getenv("ALLOWED_CHAT_IDS", "").replace(" ", "").split(",") if x
@@ -99,6 +101,24 @@ def am_tag(am_name: str | None) -> str:
     if row and row["username"]:
         return f"{esc(am_name)} @{esc(row['username'])}"
     return esc(am_name)
+
+
+def hhmm_sang_phut(s: str) -> int | None:
+    """'18:00' → 1080. None nếu chuỗi không hợp lệ."""
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", (s or "").strip())
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    return h * 60 + mi if 0 <= h < 24 and 0 <= mi < 60 else None
+
+
+def da_toi_gio_nhan() -> bool:
+    """Đã tới khung giờ nhận ảnh trong ngày chưa."""
+    moc = hhmm_sang_phut(GIO_NHAN_TU)
+    if moc is None:
+        return True
+    now = datetime.now(TZ)
+    return now.hour * 60 + now.minute >= moc
 
 
 def parse_hhmm(s: str) -> dtime | None:
@@ -193,6 +213,20 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             mg_cache.clear()
         mg_cache[msg.media_group_id] = code
 
+    # Ngoài khung giờ nhận: không tính, nhắc gửi lại. Mỗi BC chỉ nhắc 1 lần/ngày.
+    if not da_toi_gio_nhan():
+        da_nhac = context.bot_data.setdefault("nhac_gui_som", set())
+        if (ngay, code) not in da_nhac:
+            da_nhac.add((ngay, code))
+            await msg.reply_text(
+                f"⏳ <b>Chưa tới giờ nhận hình.</b>\n"
+                f"Khung giờ gửi: <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> mỗi ngày.\n"
+                f"Ảnh này <b>chưa được tính</b> cho <code>{esc(code)}</code>, "
+                f"đề nghị gửi lại sau {GIO_NHAN_TU}.",
+                parse_mode=ParseMode.HTML,
+            )
+        return
+
     file_id = msg.photo[-1].file_id if msg.photo else (msg.document.file_id if msg.document else "")
     db.record_photo(ngay, code, chat.id, msg.message_id, user.id, user.full_name, file_id)
 
@@ -226,8 +260,8 @@ def build_nhac(ngay: str, am_name: str | None = None) -> str:
     if am_name:
         out.append(f"AM: {am_tag(am_name)}")
     out += [
-        f"Hạn chót: <b>{GIO_CHOT}</b> · Yêu cầu: <b>{SO_ANH_YEU_CAU} ảnh</b> "
-        f"(layout + nhà vệ sinh, có timemark)",
+        f"Khung giờ gửi: <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> · "
+        f"Yêu cầu: <b>{SO_ANH_YEU_CAU} ảnh</b> (layout + nhà vệ sinh, có timemark)",
         f"Đã đủ: <b>{len(du)}/{tong}</b>",
         "",
     ]
@@ -400,8 +434,9 @@ HELP = """<b>BOT NHẮC CHỤP LAYOUT BƯU CỤC</b>
 
 <b>Gửi ảnh</b> — caption theo cú pháp:
 <code>Mã BC - Tên BC - Ngày/Tháng/Năm</code>
-Ví dụ: <code>23009000 - (BGI) Đa Mai - 10/08/2026</code>
+Ví dụ: <code>23009000 - (BGI) Đa Mai - 11/08/2026</code>
 Mỗi BC gửi <b>{n} ảnh</b>/ngày (layout + nhà vệ sinh, có timemark).
+⏰ Khung giờ nhận: <b>{tu} – {chot}</b>. Gửi trước {tu} bot không tính.
 
 <b>Cho nhân viên</b>
 /gan &lt;mã BC&gt; — gán mình với 1 BC, sau đó gửi ảnh không cần gõ mã
@@ -433,7 +468,8 @@ Mỗi BC gửi <b>{n} ảnh</b>/ngày (layout + nhà vệ sinh, có timemark).
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
-        HELP.format(n=SO_ANH_YEU_CAU), parse_mode=ParseMode.HTML
+        HELP.format(n=SO_ANH_YEU_CAU, tu=GIO_NHAN_TU, chot=GIO_CHOT),
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -743,6 +779,8 @@ async def cmd_lich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         f"⏱ <b>Cấu hình hiện tại</b>\n"
         f"Múi giờ: <code>{TZ}</code>\n"
+        f"Khung giờ nhận ảnh: <b>{GIO_NHAN_TU} – {GIO_CHOT}</b>"
+        f" {'(đang mở)' if da_toi_gio_nhan() else '(chưa mở)'}\n"
         f"Giờ nhắc: <b>{', '.join(GIO_NHAC)}</b>\n"
         f"Giờ chốt: <b>{GIO_CHOT}</b>\n"
         f"Số ảnh yêu cầu: <b>{SO_ANH_YEU_CAU}</b>\n"
