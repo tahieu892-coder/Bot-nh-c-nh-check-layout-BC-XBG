@@ -9,7 +9,21 @@ và chốt danh sách BC chưa đạt lúc **21:30**, kèm tổng hợp tiền p
 |---|---|
 | Trước 18:00 | Ảnh gửi sớm **không được tính** — bot nhắc gửi lại trong khung giờ |
 | 18:00 – 21:30 | Khung giờ nhận. BC gửi ảnh kèm caption `Mã BC - Tên BC - Ngày/Tháng/Năm` → bot thả 👍 và đếm ảnh |
-| Sau 21:30 | Đã chốt, ảnh **không được tính** — bot báo quá hạn (mỗi BC báo 1 lần/ngày cho mỗi tình huống) |
+| Sau 21:30 | Vẫn ghi nhận nhưng **đánh dấu trễ**, bot báo lại tại tin nhắn đó |
+
+### Hai giai đoạn
+
+Mốc chuyển là `NGAY_AP_DUNG_PHAT` (mặc định 17/08/2026):
+
+| | Tới hết 16/08 — nhắc nhở | Từ 17/08 — áp dụng phạt |
+|---|---|---|
+| Nội dung báo cáo | Chỉ liệt kê BC chưa đạt | Liệt kê + bảng tiền phạt |
+| Bảng phạt | Không có | Có, cộng dồn theo AM |
+| Cuối báo cáo | Câu nhắc sắp áp dụng phạt | — |
+| Gửi trễ | Ghi nhận, nhắc nhở | Ghi nhận nhưng tính là **không đạt** |
+
+BC được xếp vào 4 nhóm: **đạt** (đủ ảnh, đúng khung giờ) · **gửi trễ** (đủ ảnh nhưng có ảnh
+sau 21:30) · **gửi thiếu** (chưa đủ số ảnh) · **chưa gửi**.
 | 20:30 | Nhắc: bắn vào **topic riêng của từng AM**, chỉ liệt kê BC của AM đó |
 | 21:30 | Chốt: mỗi topic nhận danh sách không đạt + tiền phạt của chính AM đó |
 | 21:30 | Topic chung nhận bản tổng hợp toàn vùng (chỉ số liệu, không tag ai) |

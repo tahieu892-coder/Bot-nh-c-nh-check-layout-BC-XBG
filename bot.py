@@ -61,6 +61,10 @@ REPORT_THREAD_ID = int(os.getenv("REPORT_THREAD_ID", "0") or 0) or None
 # nhưng KHÔNG tự bắn nhắc/chốt vào group — tránh báo cáo sai trong lúc chạy thử.
 NGAY_BAT_DAU = os.getenv("NGAY_BAT_DAU", "").strip()
 
+# Trước ngày này là giai đoạn ân hạn: báo cáo chỉ liệt kê BC chưa gửi, KHÔNG tính phạt,
+# và ảnh gửi sau giờ chốt vẫn được ghi nhận (có cảnh báo).
+NGAY_AP_DUNG_PHAT = os.getenv("NGAY_AP_DUNG_PHAT", "2026-08-17").strip()
+
 MAX_LEN = 3900  # giới hạn an toàn dưới mức 4096 ký tự của Telegram
 
 
@@ -112,6 +116,16 @@ def hhmm_sang_phut(s: str) -> int | None:
     return h * 60 + mi if 0 <= h < 24 and 0 <= mi < 60 else None
 
 
+def dang_an_han() -> bool:
+    """Còn trong giai đoạn nhắc nhở, chưa áp dụng phạt."""
+    return bool(NGAY_AP_DUNG_PHAT) and today_str() < NGAY_AP_DUNG_PHAT
+
+
+def cau_canh_bao_phat() -> str:
+    return (f"📌 <b>Từ {vn_date(NGAY_AP_DUNG_PHAT)}, BC nào không gửi hình ảnh/gửi trễ, "
+            f"AM sẽ bị phạt {money(MUC_PHAT)}/BC nhé ạ!</b>")
+
+
 def trang_thai_gio() -> str:
     """Khung giờ nhận ảnh lúc này: 'chua_mo' | 'dang_mo' | 'da_dong'."""
     now = datetime.now(TZ)
@@ -152,21 +166,26 @@ async def send_long(bot, chat_id: int, text: str, thread_id: int | None = None) 
 
 
 def phan_loai(ngay: str, am_name: str | None = None):
-    """Chia BC thành: chưa gửi (0 ảnh), thiếu (0 < n < yêu cầu), đủ.
+    """Chia BC thành 4 nhóm: chưa gửi · gửi thiếu · gửi trễ · đạt.
 
+    đạt   = đủ ảnh và đều gửi trong khung giờ
+    trễ   = đủ số ảnh nhưng có ảnh bổ sung sau giờ chốt
+    thiếu = có gửi nhưng chưa đủ số ảnh
     am_name != None → chỉ lấy BC của riêng AM đó (dùng khi bắn vào topic của AM).
     """
-    chua, thieu, du = [], [], []
+    chua, thieu, tre, du = [], [], [], []
     for r in db.status(ngay):
         if am_name is not None and (r["am_name"] or "") != am_name:
             continue
-        if r["so_anh"] == 0:
-            chua.append(r)
-        elif r["so_anh"] < SO_ANH_YEU_CAU:
-            thieu.append(r)
-        else:
+        if r["so_anh_dung_han"] >= SO_ANH_YEU_CAU:
             du.append(r)
-    return chua, thieu, du
+        elif r["so_anh"] == 0:
+            chua.append(r)
+        elif r["so_anh"] >= SO_ANH_YEU_CAU:
+            tre.append(r)
+        else:
+            thieu.append(r)
+    return chua, thieu, tre, du
 
 
 def dong_bc(i: int, r, kem_am: bool = True) -> str:
@@ -216,34 +235,47 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             mg_cache.clear()
         mg_cache[msg.media_group_id] = code
 
-    # Ngoài khung giờ nhận: không tính. Mỗi BC chỉ báo 1 lần cho mỗi tình huống/ngày.
+    # Ngoài khung giờ. Mỗi BC chỉ nhận 1 tin cho mỗi tình huống trong ngày, tránh spam.
     tt = trang_thai_gio()
-    if tt != "dang_mo":
-        da_bao = context.bot_data.setdefault("bao_ngoai_gio", set())
-        if len(da_bao) > 2000:
-            da_bao.clear()
+    da_bao = context.bot_data.setdefault("bao_ngoai_gio", set())
+    if len(da_bao) > 2000:
+        da_bao.clear()
+
+    if tt == "chua_mo":  # gửi sớm thì không ghi nhận
         khoa = (ngay, code, tt)
         if khoa not in da_bao:
             da_bao.add(khoa)
-            if tt == "chua_mo":
-                noi_dung = (
-                    f"⏳ <b>Chưa tới giờ nhận hình.</b>\n"
-                    f"Khung giờ gửi: <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> mỗi ngày.\n"
-                    f"Ảnh này <b>chưa được tính</b> cho <code>{esc(code)}</code>, "
-                    f"đề nghị gửi lại sau {GIO_NHAN_TU}."
-                )
-            else:
-                noi_dung = (
-                    f"🚫 <b>Đã quá hạn {GIO_CHOT}.</b>\n"
-                    f"Danh sách hôm nay đã chốt, ảnh này <b>không được tính</b> cho "
-                    f"<code>{esc(code)}</code>.\n"
-                    f"Đề nghị gửi trong khung <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> ngày mai."
-                )
-            await msg.reply_text(noi_dung, parse_mode=ParseMode.HTML)
+            await msg.reply_text(
+                f"⏳ <b>Chưa tới giờ nhận hình.</b>\n"
+                f"Khung giờ gửi: <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> mỗi ngày.\n"
+                f"Ảnh này <b>chưa được tính</b> cho <code>{esc(code)}</code>, "
+                f"đề nghị gửi lại sau {GIO_NHAN_TU}.",
+                parse_mode=ParseMode.HTML,
+            )
         return
 
+    # Gửi trễ: vẫn ghi nhận nhưng đánh dấu để phân biệt khi tổng hợp.
+    tre = tt == "da_dong"
     file_id = msg.photo[-1].file_id if msg.photo else (msg.document.file_id if msg.document else "")
-    db.record_photo(ngay, code, chat.id, msg.message_id, user.id, user.full_name, file_id)
+    db.record_photo(ngay, code, chat.id, msg.message_id, user.id, user.full_name, file_id, tre)
+
+    if tre:
+        khoa = (ngay, code, tt)
+        if khoa not in da_bao:
+            da_bao.add(khoa)
+            if dang_an_han():
+                loi_nhac = (
+                    f"📝 Bot tạm ghi nhận BC bổ sung hình ảnh, tuy nhiên, kể từ ngày "
+                    f"<b>{vn_date(NGAY_AP_DUNG_PHAT)}</b>, nếu BC mình gửi trễ sẽ bị phạt "
+                    f"<b>{money(MUC_PHAT)}/BC</b> nhé!"
+                )
+            else:
+                loi_nhac = (
+                    f"🕘 Bot đã ghi nhận BC bổ sung hình ảnh, nhưng <b>gửi sau {GIO_CHOT} "
+                    f"vẫn tính là trễ</b> và bị phạt <b>{money(MUC_PHAT)}/BC</b>.\n"
+                    f"Đề nghị gửi trong khung <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> các ngày sau."
+                )
+            await msg.reply_text(loi_nhac, parse_mode=ParseMode.HTML)
 
     try:  # thả cảm xúc thay vì spam reply cho từng ảnh
         await context.bot.set_message_reaction(chat.id, msg.message_id, reaction="👍")
@@ -261,13 +293,30 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ------------------------------------------------------------- báo cáo -----
+def _liet_ke(out: list, chua, thieu, tre, kem_am: bool, nhan_chua: str) -> None:
+    """Ghép 3 nhóm chưa đạt vào bản báo cáo."""
+    if chua:
+        out.append(f"❌ <b>{nhan_chua} ({len(chua)})</b>")
+        out += [dong_bc(i, r, kem_am) for i, r in enumerate(chua, 1)]
+        out.append("")
+    if thieu:
+        out.append(f"⚠️ <b>GỬI THIẾU ({len(thieu)})</b>")
+        out += [f"{dong_bc(i, r, kem_am)} — {r['so_anh']}/{SO_ANH_YEU_CAU}"
+                for i, r in enumerate(thieu, 1)]
+        out.append("")
+    if tre:
+        out.append(f"🕘 <b>GỬI TRỄ ({len(tre)})</b> — bổ sung sau {GIO_CHOT}")
+        out += [dong_bc(i, r, kem_am) for i, r in enumerate(tre, 1)]
+        out.append("")
+
+
 def build_nhac(ngay: str, am_name: str | None = None) -> str:
     """Bản nhắc. am_name != None → chỉ nội dung của AM đó, tag AM đúng 1 lần ở đầu."""
-    chua, thieu, du = phan_loai(ngay, am_name)
-    tong = len(chua) + len(thieu) + len(du)
+    chua, thieu, tre, du = phan_loai(ngay, am_name)
+    tong = len(chua) + len(thieu) + len(tre) + len(du)
     if tong == 0:
         return ""
-    if not chua and not thieu:
+    if not (chua or thieu or tre):
         return (f"🎉 <b>{vn_date(ngay)}</b> — {'toàn bộ' if am_name is None else 'cả'} "
                 f"<b>{tong}</b> BC đã gửi đủ {SO_ANH_YEU_CAU} ảnh. Cảm ơn các anh/chị!")
 
@@ -280,48 +329,38 @@ def build_nhac(ngay: str, am_name: str | None = None) -> str:
         f"Đã đủ: <b>{len(du)}/{tong}</b>",
         "",
     ]
-    kem_am = am_name is None
-    if chua:
-        out.append(f"❌ <b>CHƯA GỬI ({len(chua)})</b>")
-        out += [dong_bc(i, r, kem_am) for i, r in enumerate(chua, 1)]
-        out.append("")
-    if thieu:
-        out.append(f"⚠️ <b>GỬI THIẾU ({len(thieu)})</b>")
-        out += [f"{dong_bc(i, r, kem_am)} — mới {r['so_anh']}/{SO_ANH_YEU_CAU}"
-                for i, r in enumerate(thieu, 1)]
-        out.append("")
+    _liet_ke(out, chua, thieu, tre, am_name is None, "CHƯA GỬI")
     out.append("👉 Đề nghị các BC hoàn tất trước hạn chót.")
+    if dang_an_han():
+        out.append("\n" + cau_canh_bao_phat())
     return "\n".join(out)
 
 
 def build_chot(ngay: str, am_name: str | None = None) -> str:
-    chua, thieu, du = phan_loai(ngay, am_name)
-    tong = len(chua) + len(thieu) + len(du)
+    chua, thieu, tre, du = phan_loai(ngay, am_name)
+    tong = len(chua) + len(thieu) + len(tre) + len(du)
     if tong == 0:
         return ""
-    khong_dat = chua + thieu
+    khong_dat = chua + thieu + tre
+    an_han = dang_an_han()
 
     out = [f"🔴 <b>CHỐT DANH SÁCH {GIO_CHOT} — {vn_date(ngay)}</b>"]
     if am_name:
         out.append(f"AM: {am_tag(am_name)}")
     out.append(f"Tổng: <b>{tong}</b> BC · Đạt: <b>{len(du)}</b> · "
-               f"Không đạt: <b>{len(khong_dat)}</b>")
+               f"Chưa đạt: <b>{len(khong_dat)}</b>")
     out.append("")
 
     if not khong_dat:
-        out.append(f"🎉 <b>Hoàn thành 100% đúng hạn.</b> Không phát sinh phạt.")
+        out.append("🎉 <b>Hoàn thành 100% đúng hạn.</b>"
+                   + ("" if an_han else " Không phát sinh phạt."))
         return "\n".join(out)
 
-    kem_am = am_name is None
-    if chua:
-        out.append(f"❌ <b>KHÔNG GỬI ({len(chua)})</b>")
-        out += [dong_bc(i, r, kem_am) for i, r in enumerate(chua, 1)]
-        out.append("")
-    if thieu:
-        out.append(f"⚠️ <b>GỬI THIẾU ({len(thieu)})</b>")
-        out += [f"{dong_bc(i, r, kem_am)} — {r['so_anh']}/{SO_ANH_YEU_CAU}"
-                for i, r in enumerate(thieu, 1)]
-        out.append("")
+    _liet_ke(out, chua, thieu, tre, am_name is None, "KHÔNG GỬI")
+
+    if an_han:  # giai đoạn nhắc nhở: chỉ nêu danh sách, chưa tính tiền
+        out.append(cau_canh_bao_phat())
+        return "\n".join(out)
 
     if am_name:  # trong topic riêng: chỉ nêu phạt của chính AM đó
         out.append(f"💰 <b>Phạt: {len(khong_dat)} BC × {money(MUC_PHAT)} = "
@@ -340,14 +379,17 @@ def build_chot(ngay: str, am_name: str | None = None) -> str:
 
 def build_tong_hop(ngay: str, la_chot: bool) -> str:
     """Bản tổng hợp toàn vùng cho topic chung — chỉ số liệu, KHÔNG tag ai."""
-    chua, thieu, du = phan_loai(ngay)
-    tong = len(chua) + len(thieu) + len(du)
-    khong_dat = chua + thieu
+    chua, thieu, tre, du = phan_loai(ngay)
+    tong = len(chua) + len(thieu) + len(tre) + len(du)
+    khong_dat = chua + thieu + tre
+    an_han = dang_an_han()
+    tinh_tien = la_chot and not an_han
+
     tieu_de = (f"🔴 <b>CHỐT {GIO_CHOT}" if la_chot else f"⏰ <b>NHẮC {GIO_NHAC[0]}")
     out = [f"{tieu_de} — TOÀN VÙNG — {vn_date(ngay)}</b>",
            f"Tổng: <b>{tong}</b> BC · Đạt: <b>{len(du)}</b> · "
-           f"Không đạt: <b>{len(khong_dat)}</b>"]
-    if la_chot and khong_dat:
+           f"Chưa đạt: <b>{len(khong_dat)}</b>"]
+    if tinh_tien and khong_dat:
         out.append(f"💰 Tổng phạt: <b>{money(len(khong_dat) * MUC_PHAT)}</b>")
     if not khong_dat:
         out.append("🎉 Toàn vùng hoàn thành 100%.")
@@ -358,9 +400,11 @@ def build_tong_hop(ngay: str, la_chot: bool) -> str:
         theo_am[r["am_name"] or "Chưa gán AM"] = theo_am.get(r["am_name"] or "Chưa gán AM", 0) + 1
     out.append("")
     for am, sl in sorted(theo_am.items(), key=lambda x: -x[1]):
-        tien = f" = {money(sl * MUC_PHAT)}" if la_chot else ""
+        tien = f" = {money(sl * MUC_PHAT)}" if tinh_tien else ""
         out.append(f"• {esc(am)}: {sl} BC{tien}")  # không tag, tránh trùng thông báo
     out.append("\n<i>Chi tiết từng BC đã gửi vào topic của mỗi AM.</i>")
+    if an_han:
+        out.append("\n" + cau_canh_bao_phat())
     return "\n".join(out)
 
 
@@ -735,7 +779,7 @@ async def cmd_thieu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_da(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ngay = today_str()
     am_name = am_cua_topic(update)
-    _, _, du = phan_loai(ngay, am_name)
+    _, _, _, du = phan_loai(ngay, am_name)
     if not du:
         return await update.effective_message.reply_text("Chưa có BC nào gửi đủ ảnh hôm nay.")
     out = [f"✅ <b>ĐÃ ĐỦ ẢNH — {vn_date(ngay)} ({len(du)} BC)</b>"]
@@ -799,7 +843,8 @@ async def cmd_lich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Giờ nhắc: <b>{', '.join(GIO_NHAC)}</b>\n"
         f"Giờ chốt: <b>{GIO_CHOT}</b>\n"
         f"Số ảnh yêu cầu: <b>{SO_ANH_YEU_CAU}</b>\n"
-        f"Mức phạt: <b>{money(MUC_PHAT)}</b>/BC/ngày\n"
+        f"Mức phạt: <b>{money(MUC_PHAT)}</b>/BC/ngày — "
+        f"{'áp dụng từ ' + vn_date(NGAY_AP_DUNG_PHAT) if dang_an_han() else 'đang áp dụng'}\n"
         f"Group báo cáo: <code>{REPORT_CHAT_ID}</code>\n"
         f"Đồng bộ danh sách: {('mỗi ngày ' + GIO_SYNC) if SHEET_URL else 'chưa cấu hình SHEET_URL'}\n"
         + (f"⏸ <b>Chưa áp dụng</b> — báo cáo tự động bắt đầu từ {vn_date(NGAY_BAT_DAU)}"

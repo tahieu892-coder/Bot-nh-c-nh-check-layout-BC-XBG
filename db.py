@@ -54,6 +54,7 @@ def init_db():
                 user_id    INTEGER,
                 user_name  TEXT,
                 file_id    TEXT,
+                tre        INTEGER NOT NULL DEFAULT 0,  -- 1 = gửi sau giờ chốt
                 created_at TEXT NOT NULL,
                 UNIQUE (chat_id, message_id)    -- 1 tin nhắn ảnh chỉ đếm 1 lần
             );
@@ -72,6 +73,10 @@ def init_db():
             );
             """
         )
+        # Nâng cấp DB cũ (đã tạo trước khi có cột 'tre') mà không mất dữ liệu.
+        cot = {r["name"] for r in c.execute("PRAGMA table_info(anh)")}
+        if "tre" not in cot:
+            c.execute("ALTER TABLE anh ADD COLUMN tre INTEGER NOT NULL DEFAULT 0")
 
 
 # ---------------------------------------------------------------- topic -----
@@ -237,15 +242,15 @@ def people_of(code: str) -> list[sqlite3.Row]:
 # ---------------------------------------------------------------- nộp ảnh ----
 
 def record_photo(ngay: str, code: str, chat_id: int, message_id: int,
-                 user_id: int, user_name: str, file_id: str) -> int:
+                 user_id: int, user_name: str, file_id: str, tre: bool = False) -> int:
     """Ghi nhận 1 ảnh. Trả về tổng số ảnh BC đó đã gửi trong ngày (sau khi ghi)."""
     with _conn() as c:
         c.execute(
             """INSERT OR IGNORE INTO anh
-               (ngay, code, chat_id, message_id, user_id, user_name, file_id, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (ngay, code, chat_id, message_id, user_id, user_name, file_id, tre, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (ngay, code.upper(), chat_id, message_id, user_id, user_name, file_id,
-             datetime.now().isoformat(timespec="seconds")),
+             1 if tre else 0, datetime.now().isoformat(timespec="seconds")),
         )
         row = c.execute(
             "SELECT COUNT(*) AS n FROM anh WHERE ngay = ? AND code = ?", (ngay, code.upper())
@@ -269,15 +274,22 @@ def reset_day(ngay: str, code: str) -> int:
 
 
 def status(ngay: str) -> list[sqlite3.Row]:
-    """Trạng thái toàn bộ BC active trong ngày, kèm số ảnh đã gửi."""
+    """Trạng thái toàn bộ BC active trong ngày.
+
+    so_anh        = tổng số ảnh đã gửi
+    so_anh_dung_han = số ảnh gửi trong khung giờ (không tính ảnh bổ sung sau giờ chốt)
+    """
     with _conn() as c:
         return c.execute(
             """SELECT b.code, b.name, b.am_name,
-                      (SELECT COUNT(*) FROM anh a WHERE a.ngay = ? AND a.code = b.code) AS so_anh
+                      (SELECT COUNT(*) FROM anh a
+                       WHERE a.ngay = ? AND a.code = b.code) AS so_anh,
+                      (SELECT COUNT(*) FROM anh a
+                       WHERE a.ngay = ? AND a.code = b.code AND a.tre = 0) AS so_anh_dung_han
                FROM buu_cuc b
                WHERE b.active = 1
                ORDER BY b.am_name, b.code""",
-            (ngay,),
+            (ngay, ngay),
         ).fetchall()
 
 
