@@ -112,13 +112,16 @@ def hhmm_sang_phut(s: str) -> int | None:
     return h * 60 + mi if 0 <= h < 24 and 0 <= mi < 60 else None
 
 
-def da_toi_gio_nhan() -> bool:
-    """Đã tới khung giờ nhận ảnh trong ngày chưa."""
-    moc = hhmm_sang_phut(GIO_NHAN_TU)
-    if moc is None:
-        return True
+def trang_thai_gio() -> str:
+    """Khung giờ nhận ảnh lúc này: 'chua_mo' | 'dang_mo' | 'da_dong'."""
     now = datetime.now(TZ)
-    return now.hour * 60 + now.minute >= moc
+    phut = now.hour * 60 + now.minute
+    tu, den = hhmm_sang_phut(GIO_NHAN_TU), hhmm_sang_phut(GIO_CHOT)
+    if tu is not None and phut < tu:
+        return "chua_mo"
+    if den is not None and phut >= den:
+        return "da_dong"
+    return "dang_mo"
 
 
 def parse_hhmm(s: str) -> dtime | None:
@@ -213,18 +216,30 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             mg_cache.clear()
         mg_cache[msg.media_group_id] = code
 
-    # Ngoài khung giờ nhận: không tính, nhắc gửi lại. Mỗi BC chỉ nhắc 1 lần/ngày.
-    if not da_toi_gio_nhan():
-        da_nhac = context.bot_data.setdefault("nhac_gui_som", set())
-        if (ngay, code) not in da_nhac:
-            da_nhac.add((ngay, code))
-            await msg.reply_text(
-                f"⏳ <b>Chưa tới giờ nhận hình.</b>\n"
-                f"Khung giờ gửi: <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> mỗi ngày.\n"
-                f"Ảnh này <b>chưa được tính</b> cho <code>{esc(code)}</code>, "
-                f"đề nghị gửi lại sau {GIO_NHAN_TU}.",
-                parse_mode=ParseMode.HTML,
-            )
+    # Ngoài khung giờ nhận: không tính. Mỗi BC chỉ báo 1 lần cho mỗi tình huống/ngày.
+    tt = trang_thai_gio()
+    if tt != "dang_mo":
+        da_bao = context.bot_data.setdefault("bao_ngoai_gio", set())
+        if len(da_bao) > 2000:
+            da_bao.clear()
+        khoa = (ngay, code, tt)
+        if khoa not in da_bao:
+            da_bao.add(khoa)
+            if tt == "chua_mo":
+                noi_dung = (
+                    f"⏳ <b>Chưa tới giờ nhận hình.</b>\n"
+                    f"Khung giờ gửi: <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> mỗi ngày.\n"
+                    f"Ảnh này <b>chưa được tính</b> cho <code>{esc(code)}</code>, "
+                    f"đề nghị gửi lại sau {GIO_NHAN_TU}."
+                )
+            else:
+                noi_dung = (
+                    f"🚫 <b>Đã quá hạn {GIO_CHOT}.</b>\n"
+                    f"Danh sách hôm nay đã chốt, ảnh này <b>không được tính</b> cho "
+                    f"<code>{esc(code)}</code>.\n"
+                    f"Đề nghị gửi trong khung <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> ngày mai."
+                )
+            await msg.reply_text(noi_dung, parse_mode=ParseMode.HTML)
         return
 
     file_id = msg.photo[-1].file_id if msg.photo else (msg.document.file_id if msg.document else "")
@@ -436,7 +451,7 @@ HELP = """<b>BOT NHẮC CHỤP LAYOUT BƯU CỤC</b>
 <code>Mã BC - Tên BC - Ngày/Tháng/Năm</code>
 Ví dụ: <code>23009000 - (BGI) Đa Mai - 11/08/2026</code>
 Mỗi BC gửi <b>{n} ảnh</b>/ngày (layout + nhà vệ sinh, có timemark).
-⏰ Khung giờ nhận: <b>{tu} – {chot}</b>. Gửi trước {tu} bot không tính.
+⏰ Khung giờ nhận: <b>{tu} – {chot}</b>. Gửi ngoài khung giờ bot không tính.
 
 <b>Cho nhân viên</b>
 /gan &lt;mã BC&gt; — gán mình với 1 BC, sau đó gửi ảnh không cần gõ mã
@@ -779,8 +794,8 @@ async def cmd_lich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         f"⏱ <b>Cấu hình hiện tại</b>\n"
         f"Múi giờ: <code>{TZ}</code>\n"
-        f"Khung giờ nhận ảnh: <b>{GIO_NHAN_TU} – {GIO_CHOT}</b>"
-        f" {'(đang mở)' if da_toi_gio_nhan() else '(chưa mở)'}\n"
+        f"Khung giờ nhận ảnh: <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> "
+        f"{ {'chua_mo': '(chưa mở)', 'dang_mo': '(đang mở)', 'da_dong': '(đã đóng)'}[trang_thai_gio()] }\n"
         f"Giờ nhắc: <b>{', '.join(GIO_NHAC)}</b>\n"
         f"Giờ chốt: <b>{GIO_CHOT}</b>\n"
         f"Số ảnh yêu cầu: <b>{SO_ANH_YEU_CAU}</b>\n"

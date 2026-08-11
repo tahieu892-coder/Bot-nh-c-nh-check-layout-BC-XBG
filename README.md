@@ -7,8 +7,9 @@ và chốt danh sách BC chưa đạt lúc **21:30**, kèm tổng hợp tiền p
 
 | Thời điểm | Bot làm gì |
 |---|---|
-| Trước 18:00 | Ảnh gửi sớm **không được tính** — bot nhắc gửi lại trong khung giờ (mỗi BC nhắc 1 lần/ngày) |
+| Trước 18:00 | Ảnh gửi sớm **không được tính** — bot nhắc gửi lại trong khung giờ |
 | 18:00 – 21:30 | Khung giờ nhận. BC gửi ảnh kèm caption `Mã BC - Tên BC - Ngày/Tháng/Năm` → bot thả 👍 và đếm ảnh |
+| Sau 21:30 | Đã chốt, ảnh **không được tính** — bot báo quá hạn (mỗi BC báo 1 lần/ngày cho mỗi tình huống) |
 | 20:30 | Nhắc: bắn vào **topic riêng của từng AM**, chỉ liệt kê BC của AM đó |
 | 21:30 | Chốt: mỗi topic nhận danh sách không đạt + tiền phạt của chính AM đó |
 | 21:30 | Topic chung nhận bản tổng hợp toàn vùng (chỉ số liệu, không tag ai) |
