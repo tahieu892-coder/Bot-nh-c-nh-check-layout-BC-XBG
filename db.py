@@ -71,6 +71,17 @@ def init_db():
                 thread_id INTEGER NOT NULL,
                 ghi_chu   TEXT
             );
+
+            -- Telegram không cho bot liệt kê thành viên group, nên bot tự ghi lại
+            -- những ai đã từng nhắn trong mỗi topic để biết đường tag.
+            CREATE TABLE IF NOT EXISTS thanh_vien (
+                thread_id INTEGER NOT NULL,
+                user_id   INTEGER NOT NULL,
+                username  TEXT,
+                ho_ten    TEXT,
+                lan_cuoi  TEXT NOT NULL,
+                PRIMARY KEY (thread_id, user_id)
+            );
             """
         )
         # Nâng cấp DB cũ (đã tạo trước khi có cột 'tre') mà không mất dữ liệu.
@@ -114,6 +125,28 @@ def del_topic(am_name: str) -> bool:
 def list_topic() -> list[sqlite3.Row]:
     with _conn() as c:
         return c.execute("SELECT * FROM topic ORDER BY am_name").fetchall()
+
+
+def ghi_thanh_vien(thread_id: int, user_id: int, username: str | None,
+                   ho_ten: str | None) -> None:
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO thanh_vien (thread_id, user_id, username, ho_ten, lan_cuoi)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(thread_id, user_id) DO UPDATE SET
+                   username = excluded.username,
+                   ho_ten   = excluded.ho_ten,
+                   lan_cuoi = excluded.lan_cuoi""",
+            (thread_id, user_id, username, ho_ten,
+             datetime.now().isoformat(timespec="seconds")),
+        )
+
+
+def thanh_vien_cua(thread_id: int) -> list[sqlite3.Row]:
+    with _conn() as c:
+        return c.execute(
+            "SELECT * FROM thanh_vien WHERE thread_id = ? ORDER BY ho_ten", (thread_id,)
+        ).fetchall()
 
 
 def am_dang_hoat_dong() -> list[str]:

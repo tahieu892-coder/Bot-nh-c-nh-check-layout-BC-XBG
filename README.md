@@ -8,6 +8,7 @@ và chốt danh sách BC chưa đạt lúc **21:30**, kèm tổng hợp tiền p
 | Thời điểm | Bot làm gì |
 |---|---|
 | Trước 18:00 | Ảnh gửi sớm **không được tính** — bot nhắc gửi lại trong khung giờ |
+| 18:00 | Gọi cả topic: *"Đã đến giờ chụp hình layout BC rồi anh chị ơi!"* + tag thành viên |
 | 18:00 – 21:30 | Khung giờ nhận. BC gửi ảnh kèm caption `Mã BC - Tên BC - Ngày/Tháng/Năm` → bot thả 👍 và đếm ảnh |
 | Sau 21:30 | Vẫn ghi nhận nhưng **đánh dấu trễ**, bot báo lại tại tin nhắn đó |
 
@@ -42,6 +43,17 @@ vẫn được báo, gom vào một tin ở topic chung để không sót ai.
 
 Các lệnh `/thieu`, `/da`, `/chot` gõ **trong topic** thì chỉ trả dữ liệu của AM đó;
 gõ ở **General** thì ra toàn vùng.
+
+### Tag thành viên lúc 18:00
+
+Telegram **không cho bot lấy danh sách thành viên** group — API chỉ trả về admin. Nên bot
+tự ghi lại ai đã từng nhắn trong mỗi topic, và tag đúng những người đó lúc 18:00. Danh sách
+này dày lên theo ngày; ai chưa nhắn lần nào kể từ khi bot chạy thì chưa được tag.
+
+AM luôn được gọi kể cả chưa nhắn, vì bot đã có nick từ sheet.
+
+Xem bot đang biết những ai: gõ `/dsthanhvien` trong topic. Bắn thử ngay: `/goi`.
+Nick không muốn bị làm phiền thì thêm vào biến `KHONG_TAG` (bỏ dấu @, cách nhau dấu phẩy).
 
 Bot **không** kiểm tra được ảnh có timemark hay đúng nội dung layout/WC — phần đó vẫn cần
 AM mắt thường. Bot lo phần đếm, nhắc và chốt số liệu.

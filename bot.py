@@ -65,6 +65,10 @@ NGAY_BAT_DAU = os.getenv("NGAY_BAT_DAU", "").strip()
 # và ảnh gửi sau giờ chốt vẫn được ghi nhận (có cảnh báo).
 NGAY_AP_DUNG_PHAT = os.getenv("NGAY_AP_DUNG_PHAT", "2026-08-17").strip()
 
+# Nick Telegram không muốn bị tag khi bot gọi cả topic (ngăn cách bằng dấu phẩy, bỏ @).
+KHONG_TAG = {u.lstrip("@").strip().lower()
+             for u in os.getenv("KHONG_TAG", "").split(",") if u.strip()}
+
 MAX_LEN = 3900  # giới hạn an toàn dưới mức 4096 ký tự của Telegram
 
 
@@ -451,6 +455,12 @@ async def on_any_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     tid = msg.message_thread_id if msg else None
     if not tid or (ALLOWED_CHAT_IDS and chat.id not in ALLOWED_CHAT_IDS):
         return
+
+    # Ghi nhớ ai đã nhắn trong topic này để 18:00 còn biết đường tag.
+    if not update.effective_user.is_bot:
+        db.ghi_thanh_vien(tid, update.effective_user.id,
+                          update.effective_user.username, update.effective_user.full_name)
+
     if db.am_of_thread(tid):
         return
 
@@ -474,6 +484,52 @@ def chua_toi_ngay_chay() -> bool:
         log.info("Chưa tới NGAY_BAT_DAU=%s, bỏ qua báo cáo tự động hôm nay.", NGAY_BAT_DAU)
         return True
     return False
+
+
+def _tag_thanh_vien(thread_id: int, am_name: str | None) -> str:
+    """Chuỗi tag mọi người từng nhắn trong topic, trừ những nick trong KHONG_TAG."""
+    ds, da_co = [], set()
+    for tv in db.thanh_vien_cua(thread_id):
+        if (tv["username"] or "").lower() in KHONG_TAG or tv["user_id"] in da_co:
+            continue
+        da_co.add(tv["user_id"])
+        ds.append(mention(tv["user_id"], tv["ho_ten"] or tv["username"] or "anh/chị"))
+
+    # AM luôn được gọi kể cả chưa từng nhắn trong topic
+    if am_name:
+        row = db.get_am(am_name)
+        if row and (row["username"] or "").lower() not in KHONG_TAG:
+            if row["user_id"] and row["user_id"] not in da_co:
+                ds.append(mention(row["user_id"], am_name))
+            elif not row["user_id"] and row["username"]:
+                ds.append(f"@{esc(row['username'])}")
+    return " ".join(ds)
+
+
+async def job_mo_gio(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """18:00 — gọi cả topic vào chụp hình."""
+    if chua_toi_ngay_chay():
+        return
+    ngay = today_str()
+    for am_name in db.am_dang_hoat_dong():
+        thread_id = db.get_topic(am_name)
+        if not thread_id:
+            continue
+        so_bc = len([r for r in db.list_bc() if r["am_name"] == am_name])
+        noi_dung = [
+            "📸 <b>Đã đến giờ chụp hình layout BC rồi anh chị ơi!</b>",
+            f"Khung giờ gửi: <b>{GIO_NHAN_TU} – {GIO_CHOT}</b> · "
+            f"<b>{SO_ANH_YEU_CAU} ảnh</b> (layout + nhà vệ sinh, có timemark)",
+            f"Cú pháp: <code>Mã BC - Tên BC - {vn_date(ngay)}</code>",
+            f"Topic này có <b>{so_bc}</b> BC cần gửi.",
+        ]
+        tag = _tag_thanh_vien(thread_id, am_name)
+        if tag:
+            noi_dung += ["", tag]
+        try:
+            await send_long(context.bot, REPORT_CHAT_ID, "\n".join(noi_dung), thread_id)
+        except Exception:
+            log.exception("Không gửi được lời gọi 18:00 vào topic %s", thread_id)
 
 
 async def job_nhac(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -507,6 +563,8 @@ Mỗi BC gửi <b>{n} ảnh</b>/ngày (layout + nhà vệ sinh, có timemark).
 <b>Topic theo AM</b>
 /dangkytopic &lt;tên AM&gt; — gõ BÊN TRONG topic của AM để gắn topic đó cho AM ấy
 /dstopic — xem AM nào đã/chưa có topic
+/dsthanhvien — ai trong topic này sẽ được tag lúc {tu}
+/goi — bắn thử lời gọi {tu} ngay
 /xoatopic — gỡ topic hiện tại
 /dsam — danh sách AM và số BC phụ trách
 
@@ -741,6 +799,38 @@ async def cmd_dstopic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     update.effective_message.message_thread_id)
 
 
+async def cmd_dsthanhvien(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Xem bot đang biết những ai trong topic này — chính là danh sách sẽ tag lúc 18:00."""
+    msg = update.effective_message
+    tid = msg.message_thread_id
+    if not tid:
+        return await msg.reply_text("Lệnh này phải gõ bên trong topic.")
+    ds = db.thanh_vien_cua(tid)
+    am_name = db.am_of_thread(tid)
+    tag_duoc = [t for t in ds if (t["username"] or "").lower() not in KHONG_TAG]
+    bo_qua = [t for t in ds if (t["username"] or "").lower() in KHONG_TAG]
+
+    out = [f"<b>THÀNH VIÊN BOT GHI NHẬN TRONG TOPIC NÀY</b>",
+           f"AM: {esc(am_name or 'chưa gắn')}", ""]
+    out.append(f"✅ <b>Sẽ tag lúc {GIO_NHAN_TU} ({len(tag_duoc)})</b>")
+    out += [f"• {esc(t['ho_ten'] or '')}"
+            + (f" @{esc(t['username'])}" if t["username"] else " <i>(không có nick)</i>")
+            for t in tag_duoc] or ["<i>chưa ghi nhận ai</i>"]
+    if bo_qua:
+        out.append(f"\n🚫 <b>Trong danh sách loại trừ ({len(bo_qua)})</b>")
+        out += [f"• {esc(t['ho_ten'] or '')} @{esc(t['username'])}" for t in bo_qua]
+    out.append(f"\n<i>Bot chỉ biết người đã từng nhắn trong topic kể từ khi bot chạy. "
+               f"Ai chưa nhắn lần nào thì chưa được tag.</i>")
+    await send_long(context.bot, update.effective_chat.id, "\n".join(out), tid)
+
+
+async def cmd_goi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Bắn thử lời gọi 18:00 ngay lập tức (chỉ quản trị)."""
+    if not is_admin(update.effective_user.id):
+        return await update.effective_message.reply_text("Chỉ quản trị viên dùng được lệnh này.")
+    await job_mo_gio(context)
+
+
 async def cmd_dsam(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ds = db.am_dang_hoat_dong()
     out = [f"<b>DANH SÁCH AM ({len(ds)})</b>", ""]
@@ -857,6 +947,10 @@ async def cmd_lich(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def post_init(app: Application) -> None:
     db.init_db()
     jq = app.job_queue
+    t = parse_hhmm(GIO_NHAN_TU)
+    if t:
+        jq.run_daily(job_mo_gio, time=t, name="mo-gio")
+        log.info("Đã lên lịch gọi cả topic lúc %s", GIO_NHAN_TU)
     for hhmm in GIO_NHAC:
         t = parse_hhmm(hhmm)
         if t:
@@ -942,6 +1036,8 @@ def main() -> None:
     app.add_handler(CommandHandler("dangkytopic", cmd_dangkytopic))
     app.add_handler(CommandHandler("xoatopic", cmd_xoatopic))
     app.add_handler(CommandHandler("dstopic", cmd_dstopic))
+    app.add_handler(CommandHandler("dsthanhvien", cmd_dsthanhvien))
+    app.add_handler(CommandHandler("goi", cmd_goi))
     app.add_handler(CommandHandler("dsam", cmd_dsam))
     app.add_handler(MessageHandler(
         filters.Document.FileExtension("csv") | filters.Document.FileExtension("xlsx")
