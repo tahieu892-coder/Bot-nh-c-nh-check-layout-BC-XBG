@@ -662,7 +662,7 @@ Mỗi BC gửi <b>{n} ảnh</b>/ngày, phải có timemark:
 /dstopic — xem AM nào đã/chưa có topic
 /dsthanhvien — ai trong topic này sẽ được tag lúc {goi}
 /goi — bắn thử lời gọi {goi} ngay
-/xoatopic — gỡ topic hiện tại
+/xoatopic — gỡ topic hiện tại (chỉ quản trị viên)
 /dsam — danh sách AM và số BC phụ trách
 
 <b>Cho quản lý</b>
@@ -930,8 +930,8 @@ async def cmd_taotopic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def cmd_xoatopic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not duoc_van_hanh(update.effective_user):
-        return await msg.reply_text("Lệnh này dành cho AM và quản trị viên.")
+    if not is_admin(update.effective_user.id):
+        return await msg.reply_text("Gỡ topic chỉ quản trị viên làm được.")
     am_name = am_cua_topic(update)
     if not am_name:
         return await msg.reply_text("Topic này chưa gắn với AM nào.")
