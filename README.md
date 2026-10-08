@@ -60,45 +60,8 @@ AM luôn được gọi kể cả chưa nhắn, vì bot đã có nick từ sheet
 Xem bot đang biết những ai: gõ `/dsthanhvien` trong topic. Bắn thử ngay: `/goi`.
 Nick không muốn bị làm phiền thì thêm vào biến `KHONG_TAG` (bỏ dấu @, cách nhau dấu phẩy).
 
-### Soi chất lượng ảnh
-
-Mỗi ảnh BC gửi được soi qua hai lớp, chạy nền nên không làm chậm việc ghi nhận:
-
-**Lớp 1 — độ nét.** Đo phương sai Laplacian ngay trên máy, miễn phí, không cần mạng.
-Dưới `NGUONG_NET` là ảnh rung/mất nét → bot nhắn ngay tại tin đó, đổi cảm xúc thành 🤔
-và hướng dẫn chụp lại. Ảnh đã mờ thì dừng luôn, không tốn tiền gọi lớp 2.
-
-**Lớp 2 — nội dung.** Nhờ Claude xem ảnh thuộc nhóm nào trong 3 ảnh bắt buộc và có
-chụp đúng yêu cầu không. Bắt được các lỗi hay gặp:
-
-| Lỗi | Bot phản hồi |
-|---|---|
-| Ảnh ngoại quan chỉ chụp mỗi tấm biển, chếch lên trời | Yêu cầu lùi ra chụp thấy **cả biển và bên trong** |
-| Chỉ thấy cửa, không thấy biển GHN | Chụp lại lấy được biển |
-| Ảnh layout chỉ cận một góc / một kiện hàng | Chụp lại lấy tổng thể khu vực |
-| Ảnh không thuộc nhóm nào (chụp màn hình, giấy tờ…) | Chụp lại đúng 1 trong 3 ảnh |
-
-Cần `ANTHROPIC_API_KEY`. **Không có key thì bot bỏ qua lớp 2**, chỉ chạy lớp 1 — luồng
-cũ không đổi.
-
-Xem ảnh chưa đạt trong ngày: `/anhloi` (gõ trong topic thì chỉ ra BC của AM đó).
-Các bản nhắc và bản chốt cũng có thêm mục **ẢNH CHƯA ĐẠT**.
-
-> ⚠️ **`CHAN_ANH_KHONG_DAT` mặc định `0`** — bot chỉ nhắn nhắc, ảnh vẫn được tính đủ
-> như cũ, **không đụng tới tiền phạt**. Chỉ bật lên `1` khi anh đã theo dõi vài ngày và
-> tin tưởng độ chính xác của khâu soi ảnh, vì bật là BC có ảnh chưa đạt sẽ bị tính
-> không đạt và AM bị phạt.
-
-**Chọn ngưỡng độ nét** — chạy trên vài ảnh thật, kể cả ảnh anh thấy là mờ:
-
-```bash
-python test_soi_anh.py anh1.jpg anh2.jpg anh3.jpg
-```
-
-Script in điểm độ nét từng ảnh kèm kết luận, từ đó chọn `NGUONG_NET` nằm giữa nhóm
-nét và nhóm mờ. Ảnh nét thường vài trăm tới vài nghìn, ảnh rung dưới 50.
-
-Bot **không** kiểm tra được ảnh có timemark hay không — phần đó vẫn cần AM mắt thường.
+Bot **không** kiểm tra được ảnh có timemark hay đúng nội dung layout/WC — phần đó vẫn cần
+AM mắt thường. Bot lo phần đếm, nhắc và chốt số liệu.
 
 ## Cài đặt (10 phút)
 
@@ -208,7 +171,7 @@ Bot cũng liệt kê sẵn các AM thiếu nick sau mỗi lần đồng bộ.
 ## Lệnh
 
 **Nhân viên:** `/gan <mã BC>` (gán 1 lần, sau đó gửi ảnh không cần gõ mã), `/huygan`,
-`/thieu`, `/da`, `/anhloi`, `/id`
+`/thieu`, `/da`, `/id`
 
 **Quản lý:** `/sync` (kéo lại danh sách từ Sheets), `/thembc`, `/importbc`, `/xoabc`,
 `/dsbc`, `/setam`, `/reset <mã>`, `/nhac`, `/chot`, `/tuan`, `/lich`
