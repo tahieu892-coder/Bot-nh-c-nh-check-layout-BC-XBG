@@ -149,6 +149,31 @@ def thanh_vien_cua(thread_id: int) -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def user_id_cua_am(am_name: str) -> int | None:
+    """Tra ID Telegram của một AM.
+
+    Ưu tiên ID đã xác nhận qua /setam; nếu chưa có thì dò trong danh sách người
+    đã nhắn trong các topic, khớp theo nick ở cột Tele của sheet.
+    """
+    am_name = (am_name or "").strip()
+    with _conn() as c:
+        row = c.execute(
+            "SELECT user_id, username FROM am WHERE am_name = ?", (am_name,)
+        ).fetchone()
+        if row and row["user_id"]:
+            return row["user_id"]
+        nick = (row["username"] or "").lstrip("@").strip().lower() if row else ""
+        if not nick:
+            return None
+        tv = c.execute(
+            """SELECT user_id FROM thanh_vien
+               WHERE LOWER(COALESCE(username, '')) = ?
+               ORDER BY lan_cuoi DESC LIMIT 1""",
+            (nick,),
+        ).fetchone()
+        return tv["user_id"] if tv else None
+
+
 def am_dang_hoat_dong() -> list[str]:
     """Các AM đang phụ trách ít nhất 1 BC active."""
     with _conn() as c:

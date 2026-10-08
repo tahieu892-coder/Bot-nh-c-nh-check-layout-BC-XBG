@@ -83,6 +83,12 @@ KHONG_TAG = {u.lstrip("@").strip().lower()
 # Khuôn đặt tên topic khi bot tự tạo bằng /taotopic. {ten} là tên AM.
 MAU_TEN_TOPIC = os.getenv("MAU_TEN_TOPIC", "AM {ten}")
 
+# Quyền quản trị group cấp cho AM qua /themquyen. Đổi bằng biến QUYEN_AM,
+# ví dụ QUYEN_AM=topic,ghim,xoatin (bỏ "moi" đi là AM không mời được ai).
+QUYEN_AM = {q: True for q in
+            os.getenv("QUYEN_AM", "topic,ghim,xoatin,moi").replace(" ", "").split(",")
+            if q}
+
 MAX_LEN = 3900  # giới hạn an toàn dưới mức 4096 ký tự của Telegram
 
 
@@ -577,6 +583,7 @@ Mỗi BC gửi <b>{n} ảnh</b>/ngày, phải có timemark:
 /id — xem chat id &amp; user id
 
 <b>Topic theo AM</b>
+/themquyen — cấp quyền quản trị group cho các AM
 /taotopic — bot tự tạo topic cho MỌI AM còn thiếu rồi gắn luôn
 /taotopic &lt;tên AM&gt; — chỉ tạo cho một AM
 /dangkytopic &lt;tên AM&gt; — gõ BÊN TRONG topic của AM để gắn topic đó cho AM ấy
@@ -849,6 +856,73 @@ async def cmd_taotopic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     msg.message_thread_id)
 
 
+async def cmd_themquyen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Cấp quyền quản trị group cho các AM. Không kèm tên = làm hết AM bot biết ID."""
+    msg = update.effective_message
+    if not is_admin(update.effective_user.id):
+        return await msg.reply_text("Chỉ quản trị viên dùng được lệnh này.")
+    if not REPORT_CHAT_ID:
+        return await msg.reply_text("Chưa cấu hình REPORT_CHAT_ID.")
+
+    ten = " ".join(context.args).strip()
+    ds_am = db.am_dang_hoat_dong()
+    if ten:
+        am = tim_am(ten)
+        if not am:
+            return await msg.reply_text(
+                f"Không tìm ra AM khớp với “{esc(ten)}”. Gõ /dsam để xem tên chuẩn.",
+                parse_mode=ParseMode.HTML)
+        ds_am = [am]
+
+    co_id, chua_biet = [], []
+    for am in ds_am:
+        uid = db.user_id_cua_am(am)
+        (co_id if uid else chua_biet).append((am, uid))
+
+    if not co_id:
+        return await msg.reply_text(
+            "Chưa biết ID Telegram của AM nào cả.\n"
+            "Nhờ các AM nhắn một câu bất kỳ trong group rồi gõ lại lệnh này.")
+
+    await msg.reply_text(f"⏳ Đang cấp quyền cho {len(co_id)} AM…")
+    xong, loi = [], []
+    for am, uid in co_id:
+        try:
+            await context.bot.promote_chat_member(
+                chat_id=REPORT_CHAT_ID, user_id=uid,
+                can_manage_topics=QUYEN_AM.get("topic", True),
+                can_pin_messages=QUYEN_AM.get("ghim", True),
+                can_delete_messages=QUYEN_AM.get("xoatin", True),
+                can_invite_users=QUYEN_AM.get("moi", True),
+                can_restrict_members=QUYEN_AM.get("hanche", False),
+                can_change_info=QUYEN_AM.get("doithongtin", False),
+                can_manage_video_chats=False,
+                can_promote_members=False,
+            )
+        except Exception as e:
+            log.exception("Không cấp được quyền cho AM %s (id %s)", am, uid)
+            loi.append((am, str(e)))
+            continue
+        xong.append(am)
+        try:  # đặt chức danh hiển thị cạnh tên trong group
+            await context.bot.set_chat_administrator_custom_title(
+                chat_id=REPORT_CHAT_ID, user_id=uid, custom_title="AM")
+        except Exception:
+            pass
+
+    out = [f"🔑 <b>ĐÃ CẤP QUYỀN QUẢN TRỊ CHO {len(xong)} AM</b>"]
+    out += [f"✅ {esc(a)}" for a in xong]
+    if loi:
+        out.append(f"\n❌ <b>Lỗi ({len(loi)})</b>")
+        out += [f"• {esc(a)}: {esc(e)}" for a, e in loi]
+    if chua_biet:
+        out.append(f"\n❓ <b>Chưa biết ID Telegram ({len(chua_biet)})</b>")
+        out += [f"• {esc(a)}" for a, _ in chua_biet]
+        out.append("Nhờ các AM trên nhắn một câu trong group rồi gõ lại /themquyen.")
+    await send_long(context.bot, update.effective_chat.id, "\n".join(out),
+                    msg.message_thread_id)
+
+
 async def cmd_xoatopic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     if not is_admin(update.effective_user.id):
@@ -1054,6 +1128,7 @@ async def post_init(app: Application) -> None:
         BotCommand("gan", "Gán mình với 1 mã BC"),
         BotCommand("dangkytopic", "Gắn topic hiện tại cho 1 AM"),
         BotCommand("taotopic", "Tạo topic cho AM còn thiếu"),
+        BotCommand("themquyen", "Cấp quyền quản trị group cho AM"),
         BotCommand("dstopic", "AM nào đã/chưa có topic"),
         BotCommand("dsbc", "Danh sách BC theo dõi"),
         BotCommand("tuan", "Thống kê 7 ngày"),
@@ -1116,6 +1191,7 @@ def main() -> None:
     app.add_handler(CommandHandler("sync", cmd_sync))
     app.add_handler(CommandHandler("dangkytopic", cmd_dangkytopic))
     app.add_handler(CommandHandler("taotopic", cmd_taotopic))
+    app.add_handler(CommandHandler("themquyen", cmd_themquyen))
     app.add_handler(CommandHandler("xoatopic", cmd_xoatopic))
     app.add_handler(CommandHandler("dstopic", cmd_dstopic))
     app.add_handler(CommandHandler("dsthanhvien", cmd_dsthanhvien))
