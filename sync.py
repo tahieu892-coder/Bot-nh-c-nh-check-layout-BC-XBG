@@ -114,6 +114,10 @@ def from_xlsx_bytes(data: bytes) -> list[tuple[str, str, str, str]]:
 
 def csv_url(url: str) -> str:
     """Đổi link Google Sheets thường thành link xuất CSV của đúng tab đang mở."""
+    # Link đã trả CSV sẵn (Publish to web, Apps Script web app…) thì giữ nguyên —
+    # bẻ sang /export sẽ hỏng vì id trong link /pub không phải id của file.
+    if "output=csv" in url or "/pub" in url or "/exec" in url:
+        return url
     m = re.search(r"docs\.google\.com/spreadsheets/d/([\w-]+)", url)
     if not m:
         return url

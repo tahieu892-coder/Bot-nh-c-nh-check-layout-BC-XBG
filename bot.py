@@ -27,6 +27,7 @@ from telegram.ext import (
 
 load_dotenv()
 import db  # noqa: E402  (db đọc DB_PATH từ env nên phải import sau load_dotenv)
+import soi_anh  # noqa: E402
 import sync  # noqa: E402
 
 logging.basicConfig(
@@ -80,6 +81,19 @@ NGAY_AP_DUNG_PHAT = os.getenv("NGAY_AP_DUNG_PHAT", "2026-08-17").strip()
 KHONG_TAG = {u.lstrip("@").strip().lower()
              for u in os.getenv("KHONG_TAG", "").split(",") if u.strip()}
 
+# Khuôn đặt tên topic khi bot tự tạo. {ten} là tên AM.
+MAU_TEN_TOPIC = os.getenv("MAU_TEN_TOPIC", "AM {ten}")
+
+# Ảnh mờ / chụp sai yêu cầu có bị TRỪ khỏi số ảnh hợp lệ không.
+# Mặc định 0: bot vẫn đếm như cũ và chỉ nhắn yêu cầu BC chụp lại — bật lên 1 khi
+# anh đã chắc chắn về độ chính xác của khâu soi ảnh, vì bật là ảnh hưởng tới tiền phạt.
+CHAN_ANH_KHONG_DAT = os.getenv("CHAN_ANH_KHONG_DAT", "0").strip() in ("1", "true", "True")
+
+# Chạy thử: vẫn soi và ghi kết quả vào DB nhưng KHÔNG nhắn gì vào group.
+# Để 1 trong vài ngày đầu, xem /anhloi rồi chỉnh NGUONG_NET cho khớp ảnh thật,
+# sau đó mới tắt đi cho bot bắt đầu nhắc BC.
+SOI_CHI_GHI_NHAN = os.getenv("SOI_CHI_GHI_NHAN", "1").strip() in ("1", "true", "True")
+
 MAX_LEN = 3900  # giới hạn an toàn dưới mức 4096 ký tự của Telegram
 
 
@@ -101,7 +115,29 @@ def esc(s) -> str:
 
 
 def is_admin(user_id: int) -> bool:
+    """Toàn quyền — kể cả các lệnh thay đổi cả danh sách BC."""
     return not ADMIN_IDS or user_id in ADMIN_IDS
+
+
+def la_am(user) -> str | None:
+    """Người này có phải AM không — khớp nick Telegram với cột Tele trong sheet.
+
+    Không cần khai báo tay: AM mới thêm vào sheet là tự có quyền.
+    """
+    if user is None:
+        return None
+    ten = db.am_by_username(user.username or "")
+    if ten:
+        return ten
+    for r in db.list_am():  # AM đã gõ /setam thì khớp theo user_id
+        if r["user_id"] == user.id:
+            return r["am_name"]
+    return None
+
+
+def duoc_van_hanh(user) -> bool:
+    """Quyền vận hành: AM và quản trị. Không gồm lệnh nạp/xoá danh sách BC."""
+    return is_admin(user.id) or la_am(user) is not None
 
 
 def mention(user_id, name) -> str:
@@ -181,26 +217,30 @@ async def send_long(bot, chat_id: int, text: str, thread_id: int | None = None) 
 
 
 def phan_loai(ngay: str, am_name: str | None = None):
-    """Chia BC thành 4 nhóm: chưa gửi · gửi thiếu · gửi trễ · đạt.
+    """Chia BC thành 5 nhóm: chưa gửi · gửi thiếu · gửi trễ · ảnh chưa đạt · đạt.
 
-    đạt   = đủ ảnh và đều gửi trong khung giờ
-    trễ   = đủ số ảnh nhưng có ảnh bổ sung sau giờ chốt
-    thiếu = có gửi nhưng chưa đủ số ảnh
+    đạt        = đủ ảnh hợp lệ và đều gửi trong khung giờ
+    ảnh chưa đạt = đủ số ảnh đúng giờ nhưng có ảnh mờ/chụp sai (chỉ khi CHAN_ANH_KHONG_DAT)
+    trễ        = đủ số ảnh nhưng có ảnh bổ sung sau giờ chốt
+    thiếu      = có gửi nhưng chưa đủ số ảnh
     am_name != None → chỉ lấy BC của riêng AM đó (dùng khi bắn vào topic của AM).
     """
-    chua, thieu, tre, du = [], [], [], []
+    chua, thieu, tre, du, loi = [], [], [], [], []
     for r in db.status(ngay):
         if am_name is not None and (r["am_name"] or "") != am_name:
             continue
-        if r["so_anh_dung_han"] >= SO_ANH_YEU_CAU:
+        so_hop_le = r["so_anh_dat"] if CHAN_ANH_KHONG_DAT else r["so_anh_dung_han"]
+        if so_hop_le >= SO_ANH_YEU_CAU:
             du.append(r)
         elif r["so_anh"] == 0:
             chua.append(r)
+        elif CHAN_ANH_KHONG_DAT and r["so_anh_loi"] and r["so_anh_dung_han"] >= SO_ANH_YEU_CAU:
+            loi.append(r)
         elif r["so_anh"] >= SO_ANH_YEU_CAU:
             tre.append(r)
         else:
             thieu.append(r)
-    return chua, thieu, tre, du
+    return chua, thieu, tre, du, loi
 
 
 def dong_bc(i: int, r, kem_am: bool = True) -> str:
@@ -213,6 +253,39 @@ def dong_bc(i: int, r, kem_am: bool = True) -> str:
 
 
 # ---------------------------------------------------------- xử lý ảnh gửi ---
+async def _soi_va_bao(context: ContextTypes.DEFAULT_TYPE, chat_id: int, msg, code: str) -> None:
+    """Tải ảnh về soi độ nét + nội dung, nhắn lại BC nếu chưa đạt.
+
+    Chạy nền để không giữ handler — mỗi ảnh mất vài giây, album 3 ảnh chạy song song.
+    """
+    try:
+        tep = await (msg.photo[-1].get_file() if msg.photo else msg.document.get_file())
+        data = bytes(await tep.download_as_bytearray())
+    except Exception:
+        log.exception("Không tải được ảnh để soi")
+        return
+
+    kq = await soi_anh.kiem_tra(data)
+    db.cap_nhat_soi(chat_id, msg.message_id, kq["loai"], kq["dat"], kq["do_net"], kq["ly_do"])
+    if kq["dat"] is False:
+        log.info("Ảnh chưa đạt — BC %s, loại %s, độ nét %s: %s",
+                 code, kq["loai"], kq["do_net"], kq["ly_do"])
+
+    loi = soi_anh.loi_nhan(kq)
+    if not loi or SOI_CHI_GHI_NHAN:
+        return  # chế độ chạy thử: chỉ ghi vào DB, xem bằng /anhloi
+    try:  # đổi cảm xúc để BC khỏi tưởng ảnh đã được duyệt
+        await context.bot.set_message_reaction(chat_id, msg.message_id, reaction="🤔")
+    except Exception:
+        pass
+    them = ("" if CHAN_ANH_KHONG_DAT else
+            "\n<i>Ảnh này vẫn được tính cho hôm nay, nhưng đề nghị BC chụp lại cho đúng.</i>")
+    try:
+        await msg.reply_text(f"{loi}{them}", parse_mode=ParseMode.HTML)
+    except Exception:
+        log.exception("Không gửi được nhắc ảnh chưa đạt")
+
+
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     chat = update.effective_chat
@@ -297,6 +370,9 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
 
+    # Soi ảnh chạy nền: đo độ nét tại chỗ, rồi nhờ Claude xem có chụp đúng yêu cầu không.
+    context.application.create_task(_soi_va_bao(context, chat.id, msg, code))
+
     # Cảnh báo ngày trong caption không khớp hôm nay (ảnh cũ gửi lại)
     ngay_caption = db.find_date_in_text(caption)
     if ngay_caption and ngay_caption != ngay:
@@ -308,8 +384,13 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ------------------------------------------------------------- báo cáo -----
-def _liet_ke(out: list, chua, thieu, tre, kem_am: bool, nhan_chua: str) -> None:
-    """Ghép 3 nhóm chưa đạt vào bản báo cáo."""
+def _liet_ke(out: list, chua, thieu, tre, kem_am: bool, nhan_chua: str, loi=()) -> None:
+    """Ghép các nhóm chưa đạt vào bản báo cáo."""
+    if loi:
+        out.append(f"📷 <b>ẢNH CHƯA ĐẠT ({len(loi)})</b> — mờ hoặc chụp sai yêu cầu")
+        out += [f"{dong_bc(i, r, kem_am)} — {r['so_anh_loi']} ảnh cần chụp lại"
+                for i, r in enumerate(loi, 1)]
+        out.append("")
     if chua:
         out.append(f"❌ <b>{nhan_chua} ({len(chua)})</b>")
         out += [dong_bc(i, r, kem_am) for i, r in enumerate(chua, 1)]
@@ -327,11 +408,11 @@ def _liet_ke(out: list, chua, thieu, tre, kem_am: bool, nhan_chua: str) -> None:
 
 def build_nhac(ngay: str, am_name: str | None = None) -> str:
     """Bản nhắc. am_name != None → chỉ nội dung của AM đó, tag AM đúng 1 lần ở đầu."""
-    chua, thieu, tre, du = phan_loai(ngay, am_name)
-    tong = len(chua) + len(thieu) + len(tre) + len(du)
+    chua, thieu, tre, du, loi = phan_loai(ngay, am_name)
+    tong = len(chua) + len(thieu) + len(tre) + len(du) + len(loi)
     if tong == 0:
         return ""
-    if not (chua or thieu or tre):
+    if not (chua or thieu or tre or loi):
         return (f"🎉 <b>{vn_date(ngay)}</b> — {'toàn bộ' if am_name is None else 'cả'} "
                 f"<b>{tong}</b> BC đã gửi đủ {SO_ANH_YEU_CAU} ảnh. Cảm ơn các anh/chị!")
 
@@ -344,7 +425,7 @@ def build_nhac(ngay: str, am_name: str | None = None) -> str:
         f"Đã đủ: <b>{len(du)}/{tong}</b>",
         "",
     ]
-    _liet_ke(out, chua, thieu, tre, am_name is None, "CHƯA GỬI")
+    _liet_ke(out, chua, thieu, tre, am_name is None, "CHƯA GỬI", loi)
     out.append("👉 Đề nghị các BC hoàn tất trước hạn chót.")
     if dang_an_han():
         out.append("\n" + cau_canh_bao_phat())
@@ -352,11 +433,11 @@ def build_nhac(ngay: str, am_name: str | None = None) -> str:
 
 
 def build_chot(ngay: str, am_name: str | None = None) -> str:
-    chua, thieu, tre, du = phan_loai(ngay, am_name)
-    tong = len(chua) + len(thieu) + len(tre) + len(du)
+    chua, thieu, tre, du, loi = phan_loai(ngay, am_name)
+    tong = len(chua) + len(thieu) + len(tre) + len(du) + len(loi)
     if tong == 0:
         return ""
-    khong_dat = chua + thieu + tre
+    khong_dat = chua + thieu + tre + loi
     an_han = dang_an_han()
 
     out = [f"🔴 <b>CHỐT DANH SÁCH {GIO_CHOT} — {vn_date(ngay)}</b>"]
@@ -371,7 +452,7 @@ def build_chot(ngay: str, am_name: str | None = None) -> str:
                    + ("" if an_han else " Không phát sinh phạt."))
         return "\n".join(out)
 
-    _liet_ke(out, chua, thieu, tre, am_name is None, "KHÔNG GỬI")
+    _liet_ke(out, chua, thieu, tre, am_name is None, "KHÔNG GỬI", loi)
 
     if an_han:  # giai đoạn nhắc nhở: chỉ nêu danh sách, chưa tính tiền
         out.append(cau_canh_bao_phat())
@@ -394,9 +475,9 @@ def build_chot(ngay: str, am_name: str | None = None) -> str:
 
 def build_tong_hop(ngay: str, la_chot: bool) -> str:
     """Bản tổng hợp toàn vùng cho topic chung — chỉ số liệu, KHÔNG tag ai."""
-    chua, thieu, tre, du = phan_loai(ngay)
-    tong = len(chua) + len(thieu) + len(tre) + len(du)
-    khong_dat = chua + thieu + tre
+    chua, thieu, tre, du, loi = phan_loai(ngay)
+    tong = len(chua) + len(thieu) + len(tre) + len(du) + len(loi)
+    khong_dat = chua + thieu + tre + loi
     an_han = dang_an_han()
     tinh_tien = la_chot and not an_han
 
@@ -571,9 +652,12 @@ Mỗi BC gửi <b>{n} ảnh</b>/ngày, phải có timemark:
 /huygan — bỏ gán
 /thieu — xem BC chưa gửi / gửi thiếu hôm nay
 /da — xem BC đã đủ hôm nay
+/anhloi — ảnh mờ / chụp sai yêu cầu cần chụp lại
 /id — xem chat id &amp; user id
 
 <b>Topic theo AM</b>
+/taotopic — bot tự tạo topic cho MỌI AM còn thiếu rồi gắn luôn
+/taotopic &lt;tên AM&gt; — chỉ tạo cho một AM
 /dangkytopic &lt;tên AM&gt; — gõ BÊN TRONG topic của AM để gắn topic đó cho AM ấy
 /dstopic — xem AM nào đã/chưa có topic
 /dsthanhvien — ai trong topic này sẽ được tag lúc {goi}
@@ -763,8 +847,8 @@ def am_cua_topic(update: Update) -> str | None:
 async def cmd_dangkytopic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Gõ trong topic của AM nào thì gắn topic đó cho AM ấy."""
     msg = update.effective_message
-    if not is_admin(update.effective_user.id):
-        return await msg.reply_text("Chỉ quản trị viên dùng được lệnh này.")
+    if not duoc_van_hanh(update.effective_user):
+        return await msg.reply_text("Lệnh này dành cho AM và quản trị viên.")
     tid = msg.message_thread_id
     if not tid:
         return await msg.reply_text("Lệnh này phải gõ BÊN TRONG topic của AM, không phải General.")
@@ -785,10 +869,69 @@ async def cmd_dangkytopic(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         parse_mode=ParseMode.HTML)
 
 
+async def cmd_taotopic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Tạo topic cho AM chưa có rồi gắn luôn. Không kèm tên = làm hết AM còn thiếu."""
+    msg = update.effective_message
+    if not duoc_van_hanh(update.effective_user):
+        return await msg.reply_text("Lệnh này dành cho AM và quản trị viên.")
+    if not REPORT_CHAT_ID:
+        return await msg.reply_text("Chưa cấu hình REPORT_CHAT_ID.")
+
+    ten = " ".join(context.args).strip()
+    if ten:
+        am = tim_am(ten)
+        if not am:
+            return await msg.reply_text(
+                f"Không tìm ra AM khớp với “{esc(ten)}”. Gõ /dsam để xem tên chuẩn.",
+                parse_mode=ParseMode.HTML)
+        if db.get_topic(am):
+            return await msg.reply_text(f"AM <b>{esc(am)}</b> đã có topic rồi.",
+                                        parse_mode=ParseMode.HTML)
+        can_tao = [am]
+    else:
+        can_tao = [a for a in db.am_dang_hoat_dong() if not db.get_topic(a)]
+
+    if not can_tao:
+        return await msg.reply_text("✅ Mọi AM đang phụ trách BC đều đã có topic.")
+
+    await msg.reply_text(f"⏳ Đang tạo {len(can_tao)} topic…")
+    xong, loi = [], []
+    for am in can_tao:
+        try:
+            tp = await context.bot.create_forum_topic(
+                chat_id=REPORT_CHAT_ID, name=MAU_TEN_TOPIC.format(ten=am)[:128])
+        except Exception as e:
+            log.exception("Không tạo được topic cho AM %s", am)
+            loi.append((am, str(e)))
+            continue
+
+        db.set_topic(am, tp.message_thread_id)
+        so_bc = len([r for r in db.list_bc() if r["am_name"] == am])
+        xong.append((am, tp.message_thread_id, so_bc))
+        try:  # tin mở màn để topic không trống và AM biết đây là chỗ của mình
+            await send_long(
+                context.bot, REPORT_CHAT_ID,
+                f"📌 Topic của AM {am_tag(am)} — phụ trách <b>{so_bc}</b> BC.\n"
+                f"Lời gọi {GIO_GOI}, bản nhắc {GIO_NHAC[0]} và bản chốt {GIO_CHOT} "
+                f"sẽ được gửi vào đây.",
+                tp.message_thread_id)
+        except Exception:
+            log.exception("Không gửi được tin mở màn vào topic %s", tp.message_thread_id)
+
+    out = [f"🆕 <b>ĐÃ TẠO {len(xong)} TOPIC</b>"]
+    out += [f"✅ {esc(a)} — topic <code>{t}</code> · {n} BC" for a, t, n in xong]
+    if loi:
+        out.append(f"\n❌ <b>Lỗi ({len(loi)})</b>")
+        out += [f"• {esc(a)}: {esc(e)}" for a, e in loi]
+    out.append("\nGõ /dstopic để soát lại.")
+    await send_long(context.bot, update.effective_chat.id, "\n".join(out),
+                    msg.message_thread_id)
+
+
 async def cmd_xoatopic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not is_admin(update.effective_user.id):
-        return await msg.reply_text("Chỉ quản trị viên dùng được lệnh này.")
+    if not duoc_van_hanh(update.effective_user):
+        return await msg.reply_text("Lệnh này dành cho AM và quản trị viên.")
     am_name = am_cua_topic(update)
     if not am_name:
         return await msg.reply_text("Topic này chưa gắn với AM nào.")
@@ -841,8 +984,8 @@ async def cmd_dsthanhvien(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def cmd_goi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Bắn thử lời gọi 18:00 ngay lập tức (chỉ quản trị)."""
-    if not is_admin(update.effective_user.id):
-        return await update.effective_message.reply_text("Chỉ quản trị viên dùng được lệnh này.")
+    if not duoc_van_hanh(update.effective_user):
+        return await update.effective_message.reply_text("Lệnh này dành cho AM và quản trị viên.")
     await job_mo_gio(context)
 
 
@@ -884,7 +1027,7 @@ async def cmd_thieu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_da(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ngay = today_str()
     am_name = am_cua_topic(update)
-    _, _, _, du = phan_loai(ngay, am_name)
+    _, _, _, du, _ = phan_loai(ngay, am_name)
     if not du:
         return await update.effective_message.reply_text("Chưa có BC nào gửi đủ ảnh hôm nay.")
     out = [f"✅ <b>ĐÃ ĐỦ ẢNH — {vn_date(ngay)} ({len(du)} BC)</b>"]
@@ -893,10 +1036,31 @@ async def cmd_da(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     update.effective_message.message_thread_id)
 
 
+async def cmd_anhloi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ảnh bị soi ra là mờ / chụp sai yêu cầu trong ngày."""
+    ngay = today_str()
+    am_name = am_cua_topic(update)
+    ds = [r for r in db.anh_chua_dat(ngay)
+          if am_name is None or (r["am_name"] or "") == am_name]
+    if not ds:
+        return await update.effective_message.reply_text(
+            "✅ Chưa phát hiện ảnh nào mờ hoặc chụp sai yêu cầu hôm nay.")
+
+    out = [f"📷 <b>ẢNH CHƯA ĐẠT — {vn_date(ngay)} ({len(ds)} ảnh)</b>", ""]
+    for i, r in enumerate(ds, 1):
+        loai = soi_anh.TEN_LOAI.get(r["loai"] or "", "không rõ loại")
+        phan_am = f" · AM: {am_tag(r['am_name'])}" if am_name is None else ""
+        out.append(f"{i}. <code>{esc(r['code'])}</code> {esc(r['ten_bc'] or '')}{phan_am}\n"
+                   f"    {esc(loai)} — {esc(r['ly_do'] or 'chưa đạt')}")
+    out.append("\n<i>Đề nghị các BC trên chụp lại và gửi vào group.</i>")
+    await send_long(context.bot, update.effective_chat.id, "\n".join(out),
+                    update.effective_message.message_thread_id)
+
+
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not is_admin(update.effective_user.id):
-        return await msg.reply_text("Chỉ quản trị viên dùng được lệnh này.")
+    if not duoc_van_hanh(update.effective_user):
+        return await msg.reply_text("Lệnh này dành cho AM và quản trị viên.")
     if not context.args:
         return await msg.reply_text("Cú pháp: /reset 23009000")
     n = db.reset_day(today_str(), context.args[0])
@@ -910,8 +1074,8 @@ async def cmd_nhac(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return await send_long(context.bot, update.effective_chat.id,
                                build_nhac(today_str(), am_name),
                                update.effective_message.message_thread_id)
-    if not is_admin(update.effective_user.id):
-        return await update.effective_message.reply_text("Chỉ quản trị viên bắn nhắc toàn vùng.")
+    if not duoc_van_hanh(update.effective_user):
+        return await update.effective_message.reply_text("Lệnh này dành cho AM và quản trị viên.")
     await _bao_cao(context, la_chot=False)
 
 
@@ -921,8 +1085,8 @@ async def cmd_chot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return await send_long(context.bot, update.effective_chat.id,
                                build_chot(today_str(), am_name),
                                update.effective_message.message_thread_id)
-    if not is_admin(update.effective_user.id):
-        return await update.effective_message.reply_text("Chỉ quản trị viên chốt toàn vùng.")
+    if not duoc_van_hanh(update.effective_user):
+        return await update.effective_message.reply_text("Lệnh này dành cho AM và quản trị viên.")
     await _bao_cao(context, la_chot=True)
 
 
@@ -987,8 +1151,10 @@ async def post_init(app: Application) -> None:
     await app.bot.set_my_commands([
         BotCommand("thieu", "BC chưa gửi / gửi thiếu hôm nay"),
         BotCommand("da", "BC đã gửi đủ hôm nay"),
+        BotCommand("anhloi", "Ảnh mờ / chụp sai cần chụp lại"),
         BotCommand("gan", "Gán mình với 1 mã BC"),
         BotCommand("dangkytopic", "Gắn topic hiện tại cho 1 AM"),
+        BotCommand("taotopic", "Tạo topic cho AM còn thiếu"),
         BotCommand("dstopic", "AM nào đã/chưa có topic"),
         BotCommand("dsbc", "Danh sách BC theo dõi"),
         BotCommand("tuan", "Thống kê 7 ngày"),
@@ -1043,6 +1209,7 @@ def main() -> None:
     app.add_handler(CommandHandler("huygan", cmd_huygan))
     app.add_handler(CommandHandler("thieu", cmd_thieu))
     app.add_handler(CommandHandler("da", cmd_da))
+    app.add_handler(CommandHandler("anhloi", cmd_anhloi))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("nhac", cmd_nhac))
     app.add_handler(CommandHandler("chot", cmd_chot))
@@ -1050,6 +1217,7 @@ def main() -> None:
     app.add_handler(CommandHandler("lich", cmd_lich))
     app.add_handler(CommandHandler("sync", cmd_sync))
     app.add_handler(CommandHandler("dangkytopic", cmd_dangkytopic))
+    app.add_handler(CommandHandler("taotopic", cmd_taotopic))
     app.add_handler(CommandHandler("xoatopic", cmd_xoatopic))
     app.add_handler(CommandHandler("dstopic", cmd_dstopic))
     app.add_handler(CommandHandler("dsthanhvien", cmd_dsthanhvien))
