@@ -77,8 +77,12 @@ NGAY_BAT_DAU = os.getenv("NGAY_BAT_DAU", "").strip()
 NGAY_AP_DUNG_PHAT = os.getenv("NGAY_AP_DUNG_PHAT", "2026-08-17").strip()
 
 # Nick Telegram không muốn bị tag khi bot gọi cả topic (ngăn cách bằng dấu phẩy, bỏ @).
-KHONG_TAG = {u.lstrip("@").strip().lower()
-             for u in os.getenv("KHONG_TAG", "").split(",") if u.strip()}
+# Không tag: nhận cả nick (@abc) lẫn user ID (123456). Dùng ID thì đổi nick
+# vẫn không bị tag lại.
+_khong_tag_raw = [u.lstrip("@").strip() for u in
+                  os.getenv("KHONG_TAG", "").split(",") if u.strip()]
+KHONG_TAG = {u.lower() for u in _khong_tag_raw if not u.isdigit()}
+KHONG_TAG_ID = {int(u) for u in _khong_tag_raw if u.isdigit()}
 
 # Khuôn đặt tên topic khi bot tự tạo bằng /taotopic. {ten} là tên AM.
 MAU_TEN_TOPIC = os.getenv("MAU_TEN_TOPIC", "AM {ten}")
@@ -117,6 +121,13 @@ def mention(user_id, name) -> str:
     if user_id:
         return f'<a href="tg://user?id={user_id}">{esc(name or "NV")}</a>'
     return esc(name or "")
+
+
+def bi_loai_tru(user_id=None, username=None) -> bool:
+    """Người này có nằm trong danh sách không muốn bị tag không."""
+    if user_id is not None and user_id in KHONG_TAG_ID:
+        return True
+    return (username or "").lstrip("@").strip().lower() in KHONG_TAG
 
 
 def am_tag(am_name: str | None) -> str:
@@ -510,7 +521,7 @@ def _tag_thanh_vien(thread_id: int, am_name: str | None) -> str:
     """Chuỗi tag mọi người từng nhắn trong topic, trừ những nick trong KHONG_TAG."""
     ds, da_co = [], set()
     for tv in db.thanh_vien_cua(thread_id):
-        if (tv["username"] or "").lower() in KHONG_TAG or tv["user_id"] in da_co:
+        if bi_loai_tru(tv["user_id"], tv["username"]) or tv["user_id"] in da_co:
             continue
         da_co.add(tv["user_id"])
         ds.append(mention(tv["user_id"], tv["ho_ten"] or tv["username"] or "anh/chị"))
@@ -518,7 +529,7 @@ def _tag_thanh_vien(thread_id: int, am_name: str | None) -> str:
     # AM luôn được gọi kể cả chưa từng nhắn trong topic
     if am_name:
         row = db.get_am(am_name)
-        if row and (row["username"] or "").lower() not in KHONG_TAG:
+        if row and not bi_loai_tru(row["user_id"], row["username"]):
             if row["user_id"] and row["user_id"] not in da_co:
                 ds.append(mention(row["user_id"], am_name))
             elif not row["user_id"] and row["username"]:
@@ -960,8 +971,8 @@ async def cmd_dsthanhvien(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ds = db.thanh_vien_cua(tid)
 
     am_name = db.am_of_thread(tid)
-    tag_duoc = [t for t in ds if (t["username"] or "").lower() not in KHONG_TAG]
-    bo_qua = [t for t in ds if (t["username"] or "").lower() in KHONG_TAG]
+    tag_duoc = [t for t in ds if not bi_loai_tru(t["user_id"], t["username"])]
+    bo_qua = [t for t in ds if bi_loai_tru(t["user_id"], t["username"])]
 
     out = [f"<b>THÀNH VIÊN BOT GHI NHẬN TRONG TOPIC NÀY</b>",
            f"AM: {esc(am_name or 'chưa gắn')}", ""]
