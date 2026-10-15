@@ -443,6 +443,20 @@ def build_tong_hop(ngay: str, la_chot: bool) -> str:
     return "\n".join(out)
 
 
+async def gui_vao_topic(context, thread_id: int, noi_dung: str, am_name: str) -> bool:
+    """Gửi vào topic của một AM. Topic đã bị xoá thì gỡ liên kết để thôi thử lại mỗi ngày."""
+    try:
+        await send_long(context.bot, REPORT_CHAT_ID, noi_dung, thread_id)
+        return True
+    except Exception as e:
+        if "thread not found" in str(e).lower():
+            db.del_topic(am_name)
+            log.warning("Topic %s của AM %s không còn, đã gỡ liên kết", thread_id, am_name)
+        else:
+            log.exception("Không gửi được vào topic %s (AM %s)", thread_id, am_name)
+        return False
+
+
 async def _bao_cao(context: ContextTypes.DEFAULT_TYPE, la_chot: bool) -> None:
     """Bắn báo cáo vào topic riêng của từng AM, rồi tổng hợp vào topic chung."""
     ngay = today_str()
@@ -457,10 +471,7 @@ async def _bao_cao(context: ContextTypes.DEFAULT_TYPE, la_chot: bool) -> None:
         noi_dung = build(ngay, am_name)
         if not noi_dung:
             continue
-        try:
-            await send_long(context.bot, REPORT_CHAT_ID, noi_dung, thread_id)
-        except Exception:
-            log.exception("Không gửi được vào topic %s (AM %s)", thread_id, am_name)
+        if not await gui_vao_topic(context, thread_id, noi_dung, am_name):
             khong_co_topic.append(am_name)
 
     await send_long(context.bot, REPORT_CHAT_ID, build_tong_hop(ngay, la_chot),
@@ -558,10 +569,7 @@ async def job_mo_gio(context: ContextTypes.DEFAULT_TYPE) -> None:
         tag = _tag_thanh_vien(thread_id, am_name)
         if tag:
             noi_dung += ["", tag]
-        try:
-            await send_long(context.bot, REPORT_CHAT_ID, "\n".join(noi_dung), thread_id)
-        except Exception:
-            log.exception("Không gửi được lời gọi 18:00 vào topic %s", thread_id)
+        await gui_vao_topic(context, thread_id, "\n".join(noi_dung), am_name)
 
 
 async def job_nhac(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -602,6 +610,7 @@ Mỗi BC gửi <b>{n} ảnh</b>/ngày, phải có timemark:
 /dsthanhvien — ai trong topic này sẽ được tag lúc {goi}
 /goi — bắn thử lời gọi {goi} ngay
 /xoatopic — gỡ topic hiện tại
+/xoagan &lt;tỉnh…&gt; — gỡ gán NVXL của BC thuộc tỉnh đó, VD: /xoagan HPH HDU
 /dsam — danh sách AM và số BC phụ trách
 
 <b>Cho quản lý</b>
@@ -934,6 +943,31 @@ async def cmd_themquyen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     msg.message_thread_id)
 
 
+async def cmd_xoagan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Gỡ gán NVXL của các BC thuộc những tỉnh cho trước. VD: /xoagan HPH HDU BGI BNI"""
+    msg = update.effective_message
+    if not is_admin(update.effective_user.id):
+        return await msg.reply_text("Chỉ quản trị viên dùng được lệnh này.")
+    if not context.args:
+        return await msg.reply_text(
+            "Cú pháp: /xoagan HPH HDU BGI BNI\n"
+            "Gỡ liên kết NVXL với mọi BC có tiền tố tỉnh tương ứng trong tên.")
+
+    tien_to = [a.strip().upper().strip("()") for a in context.args if a.strip()]
+    ds = db.gan_theo_tien_to(tien_to)
+    if not ds:
+        return await msg.reply_text(f"Không có gán NVXL nào thuộc {', '.join(tien_to)}.")
+
+    so = db.xoa_gan_theo_code([r["code"] for r in ds])
+    out = [f"🧹 <b>ĐÃ GỠ {so} GÁN NVXL</b> — tỉnh {', '.join(tien_to)}", ""]
+    for i, r in enumerate(ds, 1):
+        out.append(f"{i}. <code>{esc(r['code'])}</code> {esc(r['ten_bc'] or '')} — "
+                   f"{esc(r['user_name'] or r['user_id'])}")
+    out.append("\n<i>Các bạn này giờ phải ghi mã BC trong caption mới được tính.</i>")
+    await send_long(context.bot, update.effective_chat.id, "\n".join(out),
+                    msg.message_thread_id)
+
+
 async def cmd_xoatopic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     if not is_admin(update.effective_user.id):
@@ -1203,6 +1237,7 @@ def main() -> None:
     app.add_handler(CommandHandler("dangkytopic", cmd_dangkytopic))
     app.add_handler(CommandHandler("taotopic", cmd_taotopic))
     app.add_handler(CommandHandler("themquyen", cmd_themquyen))
+    app.add_handler(CommandHandler("xoagan", cmd_xoagan))
     app.add_handler(CommandHandler("xoatopic", cmd_xoatopic))
     app.add_handler(CommandHandler("dstopic", cmd_dstopic))
     app.add_handler(CommandHandler("dsthanhvien", cmd_dsthanhvien))

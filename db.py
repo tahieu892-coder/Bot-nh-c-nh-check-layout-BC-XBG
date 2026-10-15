@@ -241,6 +241,38 @@ def upsert_bc(code: str, name: str = "", am_name: str = "") -> None:
         )
 
 
+def gan_theo_tien_to(tien_to: list[str]) -> list[sqlite3.Row]:
+    """Các gán NVXL đang trỏ tới BC thuộc những tỉnh cho trước.
+
+    Khớp theo tiền tố trong tên BC, ví dụ "HPH" khớp "(HPH) Kiến An".
+    Lấy cả BC đã ngừng theo dõi, vì gán cũ thường nằm ở đúng những BC đó.
+    """
+    if not tien_to:
+        return []
+    dieu_kien = " OR ".join("UPPER(b.name) LIKE ?" for _ in tien_to)
+    tham_so = [f"%({t.strip().upper()})%" for t in tien_to]
+    with _conn() as c:
+        return c.execute(
+            f"""SELECT g.user_id, g.user_name, g.code, b.name AS ten_bc, b.active
+                FROM gan_nguoi g LEFT JOIN buu_cuc b ON b.code = g.code
+                WHERE {dieu_kien}
+                ORDER BY b.name, g.user_name""",
+            tham_so,
+        ).fetchall()
+
+
+def xoa_gan_theo_code(codes) -> int:
+    """Xoá gán NVXL của một loạt mã BC. Trả về số gán đã xoá."""
+    codes = [c.strip().upper() for c in codes if c and c.strip()]
+    if not codes:
+        return 0
+    with _conn() as c:
+        cur = c.execute(
+            f"DELETE FROM gan_nguoi WHERE code IN ({','.join('?' * len(codes))})", codes
+        )
+        return cur.rowcount
+
+
 def remove_bc(code: str) -> bool:
     """Ngừng theo dõi một BC (giữ lịch sử, chỉ tắt active)."""
     with _conn() as c:

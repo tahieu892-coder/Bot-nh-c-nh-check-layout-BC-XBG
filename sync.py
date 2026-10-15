@@ -187,6 +187,8 @@ def apply(records: list[tuple[str, str, str, str]], deactivate: bool = True) -> 
         for ma, r in hien_tai.items():
             if ma not in ma_moi:
                 db.remove_bc(ma)
+                # BC thôi theo dõi thì gán NVXL cũng hết nghĩa, xoá luôn cho sạch
+                db.xoa_gan_theo_code([ma])
                 ngung.append((ma, r["name"] or ""))
 
     return {"tong": len(records), "moi": moi, "doi_am": doi_am, "giu": giu,
