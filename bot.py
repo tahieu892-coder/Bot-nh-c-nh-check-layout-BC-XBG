@@ -611,6 +611,7 @@ Mỗi BC gửi <b>{n} ảnh</b>/ngày, phải có timemark:
 /goi — bắn thử lời gọi {goi} ngay
 /xoatopic — gỡ topic hiện tại
 /xoagan &lt;tỉnh…&gt; — gỡ gán NVXL của BC thuộc tỉnh đó, VD: /xoagan HPH HDU
+/xoanvxl — xem ai chỉ còn ở topic đã gỡ; thêm <code>xacnhan</code> để xoá khỏi nhóm
 /dsam — danh sách AM và số BC phụ trách
 
 <b>Cho quản lý</b>
@@ -943,6 +944,79 @@ async def cmd_themquyen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     msg.message_thread_id)
 
 
+async def cmd_xoanvxl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Xoá khỏi nhóm những người chỉ còn hoạt động ở các topic đã gỡ.
+
+    Chạy hai bước: gõ không tham số để xem danh sách, thêm "xacnhan" mới xoá thật.
+    """
+    msg = update.effective_message
+    if not is_admin(update.effective_user.id):
+        return await msg.reply_text("Chỉ quản trị viên dùng được lệnh này.")
+    if not REPORT_CHAT_ID:
+        return await msg.reply_text("Chưa cấu hình REPORT_CHAT_ID.")
+
+    that = any(a.strip().lower() == "xacnhan" for a in context.args)
+    ds = db.ung_vien_roi_nhom()
+
+    xoa, giu = [], []
+    for r in ds:
+        ly_do = None
+        if r["user_id"] in ADMIN_IDS:
+            ly_do = "quản trị viên"
+        elif r["la_am"]:
+            ly_do = f"là AM {r['la_am']}"
+        elif r["con_o_lai"]:
+            ly_do = f"còn hoạt động ở {r['con_o_lai']} topic đang giữ"
+        elif bi_loai_tru(r["user_id"], r["username"]):
+            ly_do = "trong danh sách không làm phiền"
+        (giu if ly_do else xoa).append((r, ly_do))
+
+    if not xoa:
+        return await msg.reply_text("Không có ai thuộc diện xoá khỏi nhóm.")
+
+    def mo_ta(r):
+        nick = f" @{esc(r['username'])}" if r["username"] else ""
+        return f"{esc(r['ho_ten'] or r['user_id'])}{nick}"
+
+    out = []
+    if not that:
+        out.append(f"👀 <b>XEM TRƯỚC — {len(xoa)} người sẽ bị xoá khỏi nhóm</b>")
+        out.append("<i>Chưa xoá ai cả. Đây là những người chỉ còn xuất hiện ở các topic "
+                   "đã gỡ, không còn hoạt động ở topic nào đang giữ.</i>\n")
+        out += [f"{i}. {mo_ta(r)}" for i, (r, _) in enumerate(xoa, 1)]
+        if giu:
+            out.append(f"\n✅ <b>Giữ lại ({len(giu)})</b>")
+            out += [f"• {mo_ta(r)} — {ly_do}" for r, ly_do in giu]
+        out.append("\n⚠️ Soát kỹ danh sách trên. Xoá thật thì gõ:\n"
+                   "<code>/xoanvxl xacnhan</code>")
+        return await send_long(context.bot, update.effective_chat.id, "\n".join(out),
+                               msg.message_thread_id)
+
+    await msg.reply_text(f"⏳ Đang xoá {len(xoa)} người khỏi nhóm…")
+    xong, loi = [], []
+    for r, _ in xoa:
+        try:
+            # Ban rồi gỡ ban ngay: người đó rời nhóm nhưng vẫn mời lại được sau này.
+            await context.bot.ban_chat_member(REPORT_CHAT_ID, r["user_id"])
+            await context.bot.unban_chat_member(REPORT_CHAT_ID, r["user_id"],
+                                                only_if_banned=True)
+        except Exception as e:
+            log.exception("Không xoá được %s khỏi nhóm", r["user_id"])
+            loi.append((r, str(e)))
+            continue
+        db.xoa_thanh_vien_da_luu(r["user_id"])
+        xong.append(r)
+
+    out = [f"🚪 <b>ĐÃ XOÁ {len(xong)} NGƯỜI KHỎI NHÓM</b>"]
+    out += [f"• {mo_ta(r)}" for r in xong]
+    if loi:
+        out.append(f"\n❌ <b>Không xoá được ({len(loi)})</b>")
+        out += [f"• {mo_ta(r)}: {esc(e)}" for r, e in loi]
+    out.append("\n<i>Họ không bị cấm vĩnh viễn, cần thì mời lại được.</i>")
+    await send_long(context.bot, update.effective_chat.id, "\n".join(out),
+                    msg.message_thread_id)
+
+
 async def cmd_xoagan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Gỡ gán NVXL của các BC thuộc những tỉnh cho trước. VD: /xoagan HPH HDU BGI BNI"""
     msg = update.effective_message
@@ -1238,6 +1312,7 @@ def main() -> None:
     app.add_handler(CommandHandler("taotopic", cmd_taotopic))
     app.add_handler(CommandHandler("themquyen", cmd_themquyen))
     app.add_handler(CommandHandler("xoagan", cmd_xoagan))
+    app.add_handler(CommandHandler("xoanvxl", cmd_xoanvxl))
     app.add_handler(CommandHandler("xoatopic", cmd_xoatopic))
     app.add_handler(CommandHandler("dstopic", cmd_dstopic))
     app.add_handler(CommandHandler("dsthanhvien", cmd_dsthanhvien))

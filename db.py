@@ -174,6 +174,39 @@ def user_id_cua_am(am_name: str) -> int | None:
         return tv["user_id"] if tv else None
 
 
+def ung_vien_roi_nhom() -> list[sqlite3.Row]:
+    """Người từng nhắn trong topic KHÔNG còn gắn với AM nào — ứng viên rời nhóm.
+
+    con_o_lai = số lần người đó xuất hiện ở các topic vẫn đang gắn với AM.
+    Lớn hơn 0 nghĩa là họ còn hoạt động trong vùng, không nên xoá.
+    la_am = tên AM nếu nick của họ khớp cột Tele trong sheet.
+    """
+    with _conn() as c:
+        return c.execute(
+            """SELECT tv.user_id,
+                      MAX(tv.username) AS username,
+                      MAX(tv.ho_ten)   AS ho_ten,
+                      COUNT(*)         AS so_topic_cu,
+                      (SELECT COUNT(*) FROM thanh_vien t2
+                       WHERE t2.user_id = tv.user_id
+                         AND t2.thread_id IN (SELECT thread_id FROM topic)) AS con_o_lai,
+                      (SELECT a.am_name FROM am a
+                       WHERE LOWER(COALESCE(a.username, '')) = LOWER(COALESCE(tv.username, ''))
+                         AND COALESCE(a.username, '') != '') AS la_am
+               FROM thanh_vien tv
+               WHERE tv.thread_id NOT IN (SELECT thread_id FROM topic)
+               GROUP BY tv.user_id
+               ORDER BY ho_ten"""
+        ).fetchall()
+
+
+def xoa_thanh_vien_da_luu(user_id: int) -> int:
+    """Xoá mọi vết của một người trong bảng thành viên sau khi họ rời nhóm."""
+    with _conn() as c:
+        cur = c.execute("DELETE FROM thanh_vien WHERE user_id = ?", (user_id,))
+        return cur.rowcount
+
+
 def am_dang_hoat_dong() -> list[str]:
     """Các AM đang phụ trách ít nhất 1 BC active."""
     with _conn() as c:
