@@ -612,6 +612,7 @@ Mỗi BC gửi <b>{n} ảnh</b>/ngày, phải có timemark:
 /xoatopic — gỡ topic hiện tại
 /xoagan &lt;tỉnh…&gt; — gỡ gán NVXL của BC thuộc tỉnh đó, VD: /xoagan HPH HDU
 /xoanvxl — xem ai chỉ còn ở topic đã gỡ; thêm <code>xacnhan</code> để xoá khỏi nhóm
+/dontopic — dò và gỡ liên kết của các topic đã bị xoá khỏi group
 /dsam — danh sách AM và số BC phụ trách
 
 <b>Cho quản lý</b>
@@ -944,6 +945,44 @@ async def cmd_themquyen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     msg.message_thread_id)
 
 
+async def don_topic_chet(context) -> list[str]:
+    """Dò từng topic đang gắn, gỡ liên kết của topic đã bị xoá.
+
+    Dùng sendChatAction nên không để lại tin nhắn nào trong group — chỉ là tín
+    hiệu "đang gõ", topic còn sống thì im lặng, topic đã xoá thì báo lỗi.
+    """
+    da_go = []
+    for r in db.list_topic():
+        try:
+            await context.bot.send_chat_action(REPORT_CHAT_ID, "typing",
+                                               message_thread_id=r["thread_id"])
+        except Exception as e:
+            if "thread not found" in str(e).lower():
+                db.del_topic(r["am_name"])
+                da_go.append(r["am_name"])
+                log.info("Topic %s của AM %s không còn, đã gỡ", r["thread_id"], r["am_name"])
+            else:
+                log.warning("Không dò được topic %s: %s", r["thread_id"], e)
+    return da_go
+
+
+async def cmd_dontopic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Dò toàn bộ topic đang gắn, gỡ những topic đã bị xoá khỏi group."""
+    msg = update.effective_message
+    if not is_admin(update.effective_user.id):
+        return await msg.reply_text("Chỉ quản trị viên dùng được lệnh này.")
+    await msg.reply_text("⏳ Đang dò các topic…")
+    da_go = await don_topic_chet(context)
+    if not da_go:
+        return await msg.reply_text(
+            f"✅ Cả {len(db.list_topic())} topic đang gắn đều còn sống, không có gì để gỡ.")
+    out = [f"🧹 <b>ĐÃ GỠ {len(da_go)} LIÊN KẾT TOPIC ĐÃ BỊ XOÁ</b>", ""]
+    out += [f"• {esc(a)}" for a in da_go]
+    out.append(f"\nCòn lại {len(db.list_topic())} topic đang gắn. Gõ /dstopic để xem.")
+    await send_long(context.bot, update.effective_chat.id, "\n".join(out),
+                    msg.message_thread_id)
+
+
 async def cmd_xoanvxl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Xoá khỏi nhóm những người chỉ còn hoạt động ở các topic đã gỡ.
 
@@ -956,6 +995,9 @@ async def cmd_xoanvxl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return await msg.reply_text("Chưa cấu hình REPORT_CHAT_ID.")
 
     that = any(a.strip().lower() == "xacnhan" for a in context.args)
+    # Gỡ trước các topic đã bị xoá, nếu không thì người trong đó vẫn bị coi là
+    # còn thuộc một topic đang gắn và không ai lọt vào danh sách.
+    da_go = await don_topic_chet(context)
     ds = db.ung_vien_roi_nhom()
 
     xoa, giu = [], []
@@ -972,7 +1014,11 @@ async def cmd_xoanvxl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         (giu if ly_do else xoa).append((r, ly_do))
 
     if not xoa:
-        return await msg.reply_text("Không có ai thuộc diện xoá khỏi nhóm.")
+        them = (f"\nĐã gỡ {len(da_go)} liên kết topic đã xoá trong lúc kiểm tra."
+                if da_go else "")
+        return await msg.reply_text(
+            f"Không có ai thuộc diện xoá khỏi nhóm.{them}\n"
+            f"Bot chỉ biết những người đã từng nhắn trong topic kể từ 08/10.")
 
     def mo_ta(r):
         nick = f" @{esc(r['username'])}" if r["username"] else ""
@@ -1313,6 +1359,7 @@ def main() -> None:
     app.add_handler(CommandHandler("themquyen", cmd_themquyen))
     app.add_handler(CommandHandler("xoagan", cmd_xoagan))
     app.add_handler(CommandHandler("xoanvxl", cmd_xoanvxl))
+    app.add_handler(CommandHandler("dontopic", cmd_dontopic))
     app.add_handler(CommandHandler("xoatopic", cmd_xoatopic))
     app.add_handler(CommandHandler("dstopic", cmd_dstopic))
     app.add_handler(CommandHandler("dsthanhvien", cmd_dsthanhvien))
